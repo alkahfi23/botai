@@ -1,0 +1,9 @@
+Flask
+python-telegram-bot
+pandas
+numpy
+ta
+requests
+matplotlib
+mplfinance
+scipy
