@@ -1,67 +1,55 @@
 from flask import Flask, request
-import os
-import pandas as pd
-import numpy as np
+import os, time, hmac, hashlib, json, io
+import pandas as pd, numpy as np, requests
 import ta
-import telebot
 from datetime import datetime
-from binance.client import Client
+import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from ta.momentum import RSIIndicator
-from chart_generator import draw_chart_by_timeframe  # Pastikan file ini tersedia dan berfungsi
+import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 
-# Load environment variables
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_BOT = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-
-client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+# Load env
+TELEGRAM_BOT = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
+GATE_API_KEY = os.getenv("GATE_API_KEY")
+GATE_API_SECRET = os.getenv("GATE_API_SECRET")
 
 POPULAR_SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT"
+    "BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "XRP_USDT",
+    "ADA_USDT", "DOT_USDT", "AVAX_USDT", "DOGE_USDT", "MATIC_USDT"
 ]
 
-def get_klines(symbol, interval="5m", limit=100):
-    try:
-        raw = client.get_klines(symbol=symbol, interval=interval, limit=limit)
-        if not raw or len(raw) < limit // 2:
-            print(f"⚠️ Data kline {symbol}-{interval} tidak mencukupi. Dapat: {len(raw)}")
-            return None
+BASE = "https://api.gateio.ws"
 
-        df = pd.DataFrame(raw, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base', 'taker_buy_quote', 'ignore'
-        ])
+def sign_request(method, path, body=""):
+    t = str(int(time.time()))
+    message = t + method + path + body
+    sign = hmac.new(GATE_API_SECRET.encode(), message.encode(), hashlib.sha512).hexdigest()
+    return {'KEY': GATE_API_KEY, 'Timestamp': t, 'SIGN': sign}
 
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-
-        # Ubah kolom angka jadi float, dengan error handling
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        df.dropna(inplace=True)
-
-        return df[['open', 'high', 'low', 'close', 'volume']]
-    except Exception as e:
-        print(f"❌ ERROR get_klines({symbol}, {interval}): {e}")
-        return None
+def get_klines(symbol, interval="1m", limit=100):
+    p = f"?currency_pair={symbol}&interval={interval}&limit={limit}"
+    path = "/api/v4/futures/usdt/candlesticks" + p
+    url = BASE + path
+    headers = {'Accept': 'application/json'}
+    resp = requests.get(url, headers=headers)
+    data = resp.json()
+    df = pd.DataFrame(data, columns=[
+        'timestamp','volume','close','high','low','open'
+    ])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+    for col in ['open','high','low','close','volume']:
+        df[col] = df[col].astype(float)
+    df.set_index('timestamp', inplace=True)
+    return df.sort_index()
 
 def get_24h_high_low(symbol):
-    try:
-        ticker = client.get_ticker(symbol=symbol)
-        high = float(ticker['highPrice'])
-        low = float(ticker['lowPrice'])
-        return high, low
-    except Exception as e:
-        print(f"❌ Gagal ambil 24h high/low untuk {symbol}: {e}")
-        return None, None
-
+    path = f"/api/v4/futures/usdt/tickers?contract={symbol}"
+    headers = sign_request("GET", path)
+    resp = requests.get(BASE + path, headers=headers)
+    d = resp.json()[0]
+    return float(d['high_24h']), float(d['low_24h'])
 def is_rsi_oversold(symbol, interval="15m", limit=100):
     df = get_klines(symbol, interval, limit)
     if df is None or df.empty or len(df) < 15:
@@ -301,7 +289,7 @@ def analyze_multi_timeframe(symbol):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
+    js = request.get_json()
 
     # === Handle callback queries (inline button clicks) ===
     if "callback_query" in data:
@@ -329,11 +317,11 @@ def webhook():
 
                         markup = InlineKeyboardMarkup()
                         button = InlineKeyboardButton(
-                            text=f"Buka {symbol} di Binance 📲",
-                            url=f"https://www.binance.com/en/futures/{symbol}?ref=GRO_16987_24H8Y"
+                            text=f"Buka {symbol} di Gate 📲",
+                            url=f"https://www.gate.io/futures/usdt/{symbol}?ref=VLYSAW9ZCQ"
                         )
                         markup.add(button)
-                        TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Binance:", reply_markup=markup)
+                        TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Gate:", reply_markup=markup)
                         found = True
                 except Exception as e:
                     print(f"Error cek {symbol}: {e}")
@@ -352,10 +340,10 @@ def webhook():
                 markup = InlineKeyboardMarkup()
                 btn_binance = InlineKeyboardButton(
                     text=f"Buka {symbol} di Binance 📲",
-                    url=f"https://www.binance.com/en/futures/{symbol}?ref=GRO_16987_24H8Y"
+                    url=f"https://www.gate.io/futures/usdt/{symbol}?ref=VLYSAW9ZCQ"
                 )
                 markup.add(btn_binance)
-                TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Binance:", reply_markup=markup)
+                TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Gate:", reply_markup=markup)
             except Exception as e:
                 TELEGRAM_BOT.send_message(chat_id, f"⚠️ Gagal generate chart: {e}")
             return "OK"
@@ -469,8 +457,8 @@ def webhook():
 
                     markup = InlineKeyboardMarkup()
                     button = InlineKeyboardButton(
-                        text=f"Buka {text} di Binance 📲",
-                        url=f"https://www.binance.com/en/futures/{text}?ref=GRO_16987_24H8Y"
+                        text=f"Buka {text} di Gate 📲",
+                        url=f"https://www.gate.io/futures/usdt/{symbol}?ref=VLYSAW9ZCQ"
                     )
                     markup.add(button)
                     TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Binance:", reply_markup=markup)
