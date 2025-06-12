@@ -1,9 +1,8 @@
 Flask
-python-telegram-bot
-pandas
-numpy
-ta
-requests
 matplotlib
 mplfinance
+pandas
+python-telegram-bot
+ta
+pyTelegramBotAPI
 scipy
