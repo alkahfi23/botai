@@ -91,12 +91,14 @@ def get_klines(symbol, interval="1m", limit=100):
         return None
 
 def get_24h_high_low(symbol):
+    symbol = normalize_symbol(symbol)
     path = f"/api/v4/futures/usdt/tickers?contract={symbol}"
     headers = sign_request("GET", path)
     resp = requests.get(BASE + path, headers=headers)
     d = resp.json()[0]
     return float(d['high_24h']), float(d['low_24h'])
 def is_rsi_oversold(symbol, interval="15m", limit=100):
+    symbol = normalize_symbol(symbol)
     df = get_klines(symbol, interval, limit)
     if df is None or df.empty or len(df) < 15:
         return False, None
@@ -112,6 +114,7 @@ def is_rsi_oversold(symbol, interval="15m", limit=100):
         
 def check_rsi_overbought(symbols, interval="15m", limit=100):
     overbought_list = []
+    symbol = normalize_symbol(symbol)
     for symbol in symbols:
         df = get_klines(symbol, interval, limit)
         if df is None or len(df) < 15:
@@ -168,6 +171,7 @@ def detect_reversal_candle(df):
     return None
 
 def backtest_strategy(symbol, interval="1m", limit=500):
+    symbol = normalize_symbol(symbol)
     df = get_klines(symbol, interval, limit)
     if df is None or df.shape[0] < 100:
         return []
@@ -216,6 +220,7 @@ def backtest_strategy(symbol, interval="1m", limit=500):
 
 def backtest_all_symbols(symbols, interval="1m", limit=500):
     summary = []
+    symbol = normalize_symbol(symbol)
     for symbol in symbols:
         results = backtest_strategy(symbol, interval, limit)
         if not results:
@@ -247,6 +252,7 @@ def format_summary(summary):
     return "\n".join(lines)
 
 def analyze_multi_timeframe(symbol):
+    symbol = normalize_symbol(symbol)
     df_15m = get_klines(symbol, '15m', 500)
     df_5m = get_klines(symbol, '5m', 500)
     df_1m = get_klines(symbol, '1m', 500)
