@@ -2,6 +2,7 @@ from flask import Flask, request
 import os, time, json
 import pandas as pd, numpy as np
 import ta
+import requests
 from datetime import datetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
