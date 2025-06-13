@@ -4,10 +4,11 @@ import pandas as pd, numpy as np
 import ta
 from datetime import datetime
 import telebot
+import gate_api
+from gate_api import Configuration, ApiClient, FuturesApi
+from gate_api.exceptions import ApiException
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from chart_generator import draw_chart_by_timeframe
-import gate_api
-from gate_api.exceptions import ApiException
 
 app = Flask(__name__)
 
