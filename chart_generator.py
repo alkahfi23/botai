@@ -17,6 +17,8 @@ from ta.trend import MACD
 
 logging.basicConfig(level=logging.INFO)
 
+futures_api = FuturesApi(api_client)
+
 # Jangan inisialisasi di luar fungsi jika startup internet lambat
 VALID_GATE_CONTRACTS = []
 
