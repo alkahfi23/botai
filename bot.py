@@ -31,17 +31,21 @@ def sign_request(method, path, body=""):
 
 def get_klines(symbol, interval="1m", limit=100):
     try:
-        p = f"?currency_pair={symbol}&interval={interval}&limit={limit}"
-        path = "/api/v4/futures/usdt/candlesticks" + p
+        path = "/api/v4/futures/usdt/candlesticks"
         url = BASE + path
+        params = {
+            "contract": symbol,  # ✅ gunakan contract, bukan currency_pair
+            "interval": interval,
+            "limit": limit
+        }
         headers = {'Accept': 'application/json'}
 
-        resp = requests.get(url, headers=headers)
-        resp.raise_for_status()  # cek kalau status bukan 200
+        resp = requests.get(url, headers=headers, params=params)
+        resp.raise_for_status()
 
         data = resp.json()
 
-        if not data or len(data) < 5:  # minimal 5 baris agar bisa dihitung indikator
+        if not data or len(data) < 5:
             print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi. Hanya {len(data)} baris.")
             return None
 
@@ -65,7 +69,6 @@ def get_klines(symbol, interval="1m", limit=100):
     except Exception as e:
         print(f"❌ ERROR get_klines({symbol}, {interval}): {e}")
         return None
-
 
 def get_24h_high_low(symbol):
     path = f"/api/v4/futures/usdt/tickers?contract={symbol}"
