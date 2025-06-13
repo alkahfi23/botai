@@ -123,7 +123,6 @@ def get_24h_high_low(symbol):
         return float(t.high_24h), float(t.low_24h)
     except:
         return None, None
-z
 
 def is_rsi_oversold(symbol, interval="15m", limit=100):
     df = get_klines(symbol, interval, limit)
