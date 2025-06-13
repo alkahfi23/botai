@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO)
 
 # === Ambil Data dari Gate.io Futures ===
 def get_klines(symbol, interval="1m", limit=100):
-def get_klines(symbol, interval="1m", limit=100):
     symbol = normalize_symbol(symbol)
     if not symbol:
         print(f"❌ Symbol tidak valid: {symbol}")
