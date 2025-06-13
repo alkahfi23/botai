@@ -54,8 +54,8 @@ def normalize_symbol(symbol):
     return None
 
 def get_klines(symbol, interval="1m", limit=100):
-    symbol = normalize_symbol(symbol)
     if not symbol:
+        symbol = normalize_symbol(symbol)
         print(f"❌ Symbol tidak valid: {symbol}")
         return None
 
