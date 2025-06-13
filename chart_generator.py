@@ -14,28 +14,32 @@ from ta.trend import MACD
 
 logging.basicConfig(level=logging.INFO)
 
-# Gate.io symbol utilities
-def get_all_gate_contracts():
-    try:
-        url = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
-        resp = requests.get(url)
-        resp.raise_for_status()
-        return [item["name"] for item in resp.json()]
-    except Exception as e:
-        print(f"❌ Gagal ambil daftar kontrak futures: {e}")
-        return []
+# Jangan inisialisasi di luar fungsi jika startup internet lambat
+VALID_GATE_CONTRACTS = []
 
-VALID_GATE_CONTRACTS = get_all_gate_contracts()
+def get_all_gate_contracts(force_reload=False):
+    global VALID_GATE_CONTRACTS
+    if not VALID_GATE_CONTRACTS or force_reload:
+        try:
+            url = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
+            resp = requests.get(url)
+            resp.raise_for_status()
+            VALID_GATE_CONTRACTS = [item["name"] for item in resp.json()]
+        except Exception as e:
+            print(f"❌ Gagal ambil kontrak futures: {e}")
+    return VALID_GATE_CONTRACTS
 
 def normalize_symbol(symbol):
+    contracts = get_all_gate_contracts()
     symbol = symbol.strip().upper()
-    if symbol in VALID_GATE_CONTRACTS:
+    if symbol in contracts:
         return symbol
     if "_" not in symbol and symbol.endswith("USDT"):
         converted = symbol.replace("USDT", "_USDT")
-        if converted in VALID_GATE_CONTRACTS:
+        if converted in contracts:
             return converted
     return None
+
 
 # Klines from Gate.io REST
 
