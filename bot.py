@@ -176,9 +176,6 @@ Candle: `{candle_pattern or 'N/A'}`
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    if not data:
-    return "NO DATA"
-
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "").strip().upper()
