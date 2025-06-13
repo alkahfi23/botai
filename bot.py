@@ -289,7 +289,7 @@ def analyze_multi_timeframe(symbol):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    js = request.get_json()
+    data = request.get_json()
 
     # === Handle callback queries (inline button clicks) ===
     if "callback_query" in data:
