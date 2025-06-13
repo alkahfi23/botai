@@ -17,6 +17,9 @@ from ta.trend import MACD
 
 logging.basicConfig(level=logging.INFO)
 
+GATE_API_KEY = os.getenv("GATE_API_KEY")
+GATE_API_SECRET = os.getenv("GATE_API_SECRET")
+
 # Konfigurasi dan klien
 configuration = Configuration(
     key=GATE_API_KEY,
