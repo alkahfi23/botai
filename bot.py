@@ -114,8 +114,12 @@ def get_24h_high_low(symbol):
     try:
         tickers = futures_api.list_futures_tickers(settle="usdt")
         t = next((x for x in tickers if x.name == symbol), None)
-        return float(t.high_24h), float(t.low_24h) if t else (None, None)
-    except: return None, None
+        if not t:
+            return None, None
+        return float(t.high_24h), float(t.low_24h)
+    except:
+        return None, None
+z
 
 def is_rsi_oversold(symbol, interval="15m", limit=100):
     df = get_klines(symbol, interval, limit)
