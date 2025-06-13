@@ -17,6 +17,10 @@ TELEGRAM_BOT = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
 GATE_API_KEY = os.getenv("GATE_API_KEY")
 GATE_API_SECRET = os.getenv("GATE_API_SECRET")
 
+if not GATE_API_KEY or not GATE_API_SECRET:
+    raise ValueError("❌ GATE_API_KEY atau GATE_API_SECRET tidak ditemukan di environment variable.")
+
+
 # Konfigurasi dan klien
 configuration = Configuration(
     key=GATE_API_KEY,
