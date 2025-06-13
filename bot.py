@@ -1,48 +1,45 @@
 from flask import Flask, request
-import os, time, hmac, hashlib, json, io
-import pandas as pd, numpy as np, requests
+import os, time, json
+import pandas as pd, numpy as np
 import ta
 from datetime import datetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from ta.momentum import RSIIndicator
-import matplotlib.pyplot as plt
 from chart_generator import draw_chart_by_timeframe
+import gate_api
+from gate_api.exceptions import ApiException
 
 app = Flask(__name__)
 
-# Load env
+# ENV VARS
 TELEGRAM_BOT = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
 GATE_API_KEY = os.getenv("GATE_API_KEY")
 GATE_API_SECRET = os.getenv("GATE_API_SECRET")
+
+# Gate.io SDK setup
+configuration = gate_api.Configuration(
+    host="https://api.gateio.ws",
+    key=GATE_API_KEY,
+    secret=GATE_API_SECRET
+)
+api_client = gate_api.ApiClient(configuration)
+futures_api = gate_api.FuturesApi(api_client)
 
 POPULAR_SYMBOLS = [
     "BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "XRP_USDT",
     "ADA_USDT", "DOT_USDT", "AVAX_USDT", "DOGE_USDT", "MATIC_USDT"
 ]
 
-BASE = "https://api.gateio.ws"
-
-def sign_request(method, path, body=""):
-    t = str(int(time.time()))
-    message = t + method + path + body
-    sign = hmac.new(GATE_API_SECRET.encode(), message.encode(), hashlib.sha512).hexdigest()
-    return {'KEY': GATE_API_KEY, 'Timestamp': t, 'SIGN': sign}
-
-# 🔄 Ambil semua kontrak dari Gate.io (sekali saat start)
+# Symbol handling
 def get_all_gate_contracts():
     try:
-        url = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
-        resp = requests.get(url)
-        resp.raise_for_status()
-        return [item["name"] for item in resp.json()]  # contoh: BTC_USDT
-    except Exception as e:
-        print(f"❌ Gagal ambil daftar kontrak futures: {e}")
+        contracts = futures_api.list_futures_contracts(settle="usdt")
+        return [c.name for c in contracts]
+    except:
         return []
 
 VALID_GATE_CONTRACTS = get_all_gate_contracts()
 
-# ✅ Fungsi normalisasi simbol user input (ex: BTCUSDT → BTC_USDT)
 def normalize_symbol(symbol):
     symbol = symbol.strip().upper()
     if symbol in VALID_GATE_CONTRACTS:
@@ -53,474 +50,191 @@ def normalize_symbol(symbol):
             return converted
     return None
 
+# Technicals
 def get_klines(symbol, interval="1m", limit=100):
-    if not symbol:
-        symbol = normalize_symbol(symbol)
-        print(f"❌ Symbol tidak valid: {symbol}")
-        return None
-
+    symbol = normalize_symbol(symbol)
+    if not symbol: return None
     try:
-        url = "https://api.gateio.ws/api/v4/futures/usdt"
-        params = {
-            "contract": symbol,
-            "interval": interval,
-            "limit": limit
-        }
-        headers = {"Accept": "application/json"}
-        resp = requests.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-        if not data or len(data) < 5:
-            print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi.")
-            return None
-
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'volume', 'close', 'high', 'low', 'open'
-        ])
+        candles = futures_api.list_futures_candlesticks(
+            settle="usdt", contract=symbol, interval=interval, limit=limit
+        )
+        df = pd.DataFrame(candles, columns=['timestamp','volume','close','high','low','open'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-        for col in ['open', 'high', 'low', 'close', 'volume']:
+        for col in ['open','high','low','close','volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-
         df.dropna(inplace=True)
         df.set_index('timestamp', inplace=True)
         return df.sort_index()
-
-    except Exception as e:
-        print(f"❌ ERROR get_klines({symbol}, {interval}): {e}")
-        return None
+    except: return None
 
 def get_24h_high_low(symbol):
     symbol = normalize_symbol(symbol)
-    path = f"/api/v4/futures/usdt/tickers?contract={symbol}"
-    headers = sign_request("GET", path)
-    resp = requests.get(BASE + path, headers=headers)
-    d = resp.json()[0]
-    return float(d['high_24h']), float(d['low_24h'])
-def is_rsi_oversold(symbol, interval="15m", limit=100):
-    symbol = normalize_symbol(symbol)
-    df = get_klines(symbol, interval, limit)
-    if df is None or df.empty or len(df) < 15:
-        return False, None
-
     try:
-        rsi_indicator = ta.momentum.RSIIndicator(close=df["close"], window=14)
-        df["RSI_14"] = rsi_indicator.rsi()
-        latest_rsi = df["RSI_14"].iloc[-1]
-        return latest_rsi < 30, latest_rsi
-    except Exception as e:
-        print(f"❌ Error hitung RSI {symbol}: {e}")
-        return False, None
-        
+        tickers = futures_api.list_futures_tickers(settle="usdt")
+        t = next((x for x in tickers if x.name == symbol), None)
+        return float(t.high_24h), float(t.low_24h) if t else (None, None)
+    except: return None, None
+
+def is_rsi_oversold(symbol, interval="15m", limit=100):
+    df = get_klines(symbol, interval, limit)
+    if df is None or len(df) < 15: return False, None
+    try:
+        rsi = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
+        return rsi < 30, rsi
+    except: return False, None
+
 def check_rsi_overbought(symbols, interval="15m", limit=100):
-    overbought_list = []
-    for symbol in symbols:
-        symbol = normalize_symbol(symbol)
-        df = get_klines(symbol, interval, limit)
-        if df is None or len(df) < 15:
-            continue
+    result = []
+    for s in symbols:
+        df = get_klines(s, interval, limit)
+        if df is None or len(df) < 15: continue
         try:
             rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
-            if rsi > 70:
-                overbought_list.append((symbol, round(rsi, 2)))
-        except Exception as e:
-            print(f"❌ Error RSI {symbol}: {e}")
-    return sorted(overbought_list, key=lambda x: -x[1])  # Urutkan dari RSI tertinggi
+            if rsi > 70: result.append((s, round(rsi, 2)))
+        except: continue
+    return sorted(result, key=lambda x: -x[1])
 
-# Ganti fungsi ini
 def detect_reversal_candle(df):
-    if len(df) < 3:
-        return None
-
-    c1 = df.iloc[-3]  # Candle pertama (pola)
-    c2 = df.iloc[-2]  # Candle kedua
-    c3 = df.iloc[-1]  # Candle ketiga (konfirmasi)
-
-    def body(c): return abs(c['close'] - c['open'])
-    def upper(c): return c['high'] - max(c['close'], c['open'])
-    def lower(c): return min(c['close'], c['open']) - c['low']
-    def is_bullish(c): return c['close'] > c['open']
-    def is_bearish(c): return c['close'] < c['open']
-    def body_ratio(c): return body(c) / (c['high'] - c['low'] + 1e-6)
-
-    # --- HAMMER ---
-    if body_ratio(c2) < 0.3 and lower(c2) > 2 * body(c2) and upper(c2) < body(c2):
-        if is_bullish(c3):  # konfirmasi naik
-            return "Hammer"
-
-    # --- INVERTED HAMMER ---
-    if body_ratio(c2) < 0.3 and upper(c2) > 2 * body(c2) and lower(c2) < body(c2):
-        if is_bullish(c3):
-            return "InvertedHammer"
-
-    # --- BULLISH ENGULFING ---
-    if is_bearish(c1) and is_bullish(c2) and c2['open'] < c1['close'] and c2['close'] > c1['open']:
-        if is_bullish(c3):
-            return "Engulfing"
-
-    # --- SHOOTING STAR ---
-    if body_ratio(c2) < 0.3 and upper(c2) > 2 * body(c2) and lower(c2) < body(c2):
-        if is_bearish(c3):
-            return "ShootingStar"
-
-    # --- BEARISH ENGULFING ---
-    if is_bullish(c1) and is_bearish(c2) and c2['open'] > c1['close'] and c2['close'] < c1['open']:
-        if is_bearish(c3):
-            return "Engulfing"
-
+    if len(df) < 3: return None
+    c1, c2, c3 = df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    body = lambda c: abs(c['close'] - c['open'])
+    upper = lambda c: c['high'] - max(c['close'], c['open'])
+    lower = lambda c: min(c['close'], c['open']) - c['low']
+    is_bullish = lambda c: c['close'] > c['open']
+    is_bearish = lambda c: c['close'] < c['open']
+    body_ratio = lambda c: body(c) / (c['high'] - c['low'] + 1e-6)
+    if body_ratio(c2) < 0.3 and lower(c2) > 2 * body(c2) and is_bullish(c3): return "Hammer"
+    if body_ratio(c2) < 0.3 and upper(c2) > 2 * body(c2) and is_bullish(c3): return "InvertedHammer"
+    if is_bearish(c1) and is_bullish(c2) and c2['close'] > c1['open'] and is_bullish(c3): return "Engulfing"
+    if body_ratio(c2) < 0.3 and upper(c2) > 2 * body(c2) and is_bearish(c3): return "ShootingStar"
+    if is_bullish(c1) and is_bearish(c2) and c2['close'] < c1['open'] and is_bearish(c3): return "Engulfing"
     return None
-
-def backtest_strategy(symbol, interval="1m", limit=500):
-    df = get_klines(symbol, interval, limit)
-    if df is None or df.shape[0] < 100:
-        return []
-
-    df['EMA20'] = df['close'].ewm(span=20).mean()
-    df['RSI'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
-    df['BB_H'] = bb.bollinger_hband()
-    df['BB_L'] = bb.bollinger_lband()
-
-    results = []
-    for i in range(30, len(df) - 10):
-        candle = df.iloc[i]
-        trend = "UP" if df.iloc[i-5:i]['close'].mean() > df.iloc[i-5:i]['EMA20'].mean() else "DOWN"
-        candle_pattern = detect_reversal_candle(df.iloc[i-2:i+1])
-
-        entry = candle['close']
-        result = None
-        take_profit = None
-        stop_loss = None
-        RR = None
-
-        if trend == "UP" and candle['RSI'] < 30 and candle['close'] < candle['BB_L'] and candle_pattern in ['Hammer', 'InvertedHammer', 'Engulfing']:
-            stop_loss = df.iloc[i]['low']
-            take_profit = entry + (entry - stop_loss) * 2
-            future = df.iloc[i+1:i+6]
-            if (future['high'] >= take_profit).any():
-                result = "WIN"
-            elif (future['low'] <= stop_loss).any():
-                result = "LOSS"
-
-        elif trend == "DOWN" and candle['RSI'] > 70 and candle['close'] > candle['BB_H'] and candle_pattern in ['ShootingStar', 'Engulfing']:
-            stop_loss = df.iloc[i]['high']
-            take_profit = entry - (stop_loss - entry) * 2
-            future = df.iloc[i+1:i+6]
-            if (future['low'] <= take_profit).any():
-                result = "WIN"
-            elif (future['high'] >= stop_loss).any():
-                result = "LOSS"
-
-        if result:
-            RR = 2.0
-            results.append({"index": i, "result": result, "RR": RR})
-
-    return results
-
-def backtest_all_symbols(symbols, interval="1m", limit=500):
-    summary = []
-    for symbol in symbols:
-        symbol = normalize_symbol(symbol)
-        results = backtest_strategy(symbol, interval, limit)
-        if not results:
-            continue
-        total = len(results)
-        wins = sum(1 for r in results if r["result"] == "WIN")
-        losses = sum(1 for r in results if r["result"] == "LOSS")
-        rr_list = [r["RR"] for r in results if r["RR"] is not None]
-        accuracy = (wins / total) * 100 if total > 0 else 0
-        avg_rr = np.mean(rr_list) if rr_list else 0
-        profit_factor = (wins * 2) / (losses * 1) if losses > 0 else float("inf")
-        summary.append({
-            "symbol": symbol,
-            "total_trades": total,
-            "wins": wins,
-            "losses": losses,
-            "accuracy": round(accuracy, 2),
-            "avg_rr": round(avg_rr, 2),
-            "profit_factor": round(profit_factor, 2) if isinstance(profit_factor, float) else "∞"
-        })
-    return summary
-
-def format_summary(summary):
-    lines = ["📊 *Rangkuman Backtest Semua Pair:*\n"]
-    lines.append("Pair | Trade | Win | Loss | Akurasi | R:R | Profit")
-    lines.append("-" * 45)
-    for s in summary:
-        lines.append(f"{s['symbol']} | {s['total_trades']} | {s['wins']} | {s['losses']} | {s['accuracy']}% | {s['avg_rr']} | {s['profit_factor']}")
-    return "\n".join(lines)
 
 def analyze_multi_timeframe(symbol):
     df_15m = get_klines(symbol, '15m', 500)
     df_5m = get_klines(symbol, '5m', 500)
     df_1m = get_klines(symbol, '1m', 500)
-
-    if df_1m is None or df_5m is None or df_15m is None:
-        print(f"⚠️ Gagal ambil data untuk {symbol}. Timeframe yang error:")
-        if df_15m is None: print("- 15m")
-        if df_5m is None: print("- 5m")
-        if df_1m is None: print("- 1m")
+    if not all([df_15m is not None, df_5m is not None, df_1m is not None]):
         return f"❌ Gagal ambil data {symbol}", "ERROR", 0
-
     try:
         for df in [df_15m, df_5m, df_1m]:
             df['EMA20'] = df['close'].ewm(span=20).mean()
             df['RSI'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
             bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
-            df['BB_H'] = bb.bollinger_hband()
-            df['BB_L'] = bb.bollinger_lband()
+            df['BB_H'] = bb.bollinger_hband(); df['BB_L'] = bb.bollinger_lband()
     except Exception as e:
-        print(f"❌ Error hitung indikator: {e}")
         return f"❌ Error indikator {symbol}: {e}", "ERROR", 0
-
-    signal = None
-    entry = None
-    stop_loss = None
-    take_profit = None
-    current_price = df_1m['close'].iloc[-1]
+    last = df_1m.iloc[-1]
     candle_pattern = detect_reversal_candle(df_1m)
-
     trend_15m = "UP" if df_15m['close'].iloc[-1] > df_15m['EMA20'].iloc[-1] else "DOWN"
     trend_5m = "UP" if df_5m['close'].iloc[-1] > df_5m['EMA20'].iloc[-1] else "DOWN"
-    last = df_1m.iloc[-1]
-
-    # Ambil high/low 24 jam
     high_24h, low_24h = get_24h_high_low(symbol)
-    if high_24h is None or low_24h is None:
-        return f"❌ Gagal ambil data 24H untuk {symbol}", "ERROR", 0
-
-    is_near_24h_low = current_price <= (low_24h + 0.01 * low_24h)
-    is_near_24h_high = current_price >= (high_24h - 0.01 * high_24h)
-
+    near_low = last['close'] <= low_24h * 1.01
+    near_high = last['close'] >= high_24h * 0.99
+    signal, entry, stop_loss, take_profit = None, None, None, None
     if trend_15m == "UP" and trend_5m == "UP":
-        if last['RSI'] < 30 and last['close'] < last['BB_L'] and is_near_24h_low and candle_pattern in ['Hammer', 'InvertedHammer', 'Engulfing']:
+        if last['RSI'] < 30 and last['close'] < last['BB_L'] and near_low and candle_pattern in ['Hammer', 'InvertedHammer', 'Engulfing']:
             signal = "LONG"
-            entry = current_price
-            prev_below_bb = df_1m[:-1][df_1m['close'] < df_1m['BB_L']]
-            stop_loss = prev_below_bb['low'].iloc[-1] if not prev_below_bb.empty else df_1m['low'].min()
-            risk = entry - stop_loss
-            take_profit = entry + (2 * risk)
-
+            entry = last['close']
+            sl = df_1m[df_1m['close'] < df_1m['BB_L']]['low']
+            stop_loss = sl.iloc[-1] if not sl.empty else df_1m['low'].min()
+            take_profit = entry + 2 * (entry - stop_loss)
     elif trend_15m == "DOWN" and trend_5m == "DOWN":
-        if last['RSI'] > 70 and last['close'] > last['BB_H'] and is_near_24h_high and candle_pattern in ['ShootingStar', 'Engulfing']:
+        if last['RSI'] > 70 and last['close'] > last['BB_H'] and near_high and candle_pattern in ['ShootingStar', 'Engulfing']:
             signal = "SHORT"
-            entry = current_price
-            prev_above_bb = df_1m[:-1][df_1m['close'] > df_1m['BB_H']]
-            stop_loss = prev_above_bb['high'].iloc[-1] if not prev_above_bb.empty else df_1m['high'].max()
-            risk = stop_loss - entry
-            take_profit = entry - (2 * risk)
-
-    result = f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n"
-    result += f"📉 Pair: {symbol}\n"
-    result += f"Trend 15m: {trend_15m}\n"
-    result += f"Trend 5m: {trend_5m}\n"
-    result += f"🕯️ RSI 1m: {last['RSI']:.2f}\n"
-    result += f"📊 Harga Sekarang: {current_price:.2f}\n"
-    result += f"🕯️ Pola Candle Terbaca: `{candle_pattern or 'Tidak ada'}`\n"
-    result += f"📈 High 24H: {high_24h:.2f}\n"
-    result += f"📉 Low 24H: {low_24h:.2f}\n"
-
-    if is_near_24h_low:
-        result += "⚠️ Dekat dengan **LOW 24H** (potensi rebound)\n"
-    if is_near_24h_high:
-        result += "⚠️ Dekat dengan **HIGH 24H** (potensi koreksi)\n"
-
+            entry = last['close']
+            sl = df_1m[df_1m['close'] > df_1m['BB_H']]['high']
+            stop_loss = sl.iloc[-1] if not sl.empty else df_1m['high'].max()
+            take_profit = entry - 2 * (stop_loss - entry)
+    msg = f"""📉 Pair: {symbol}
+Trend 15m: {trend_15m} | 5m: {trend_5m}
+RSI 1m: {last['RSI']:.2f} | Price: {last['close']:.2f}
+Candle: `{candle_pattern or 'N/A'}`
+24H High: {high_24h:.2f} | Low: {low_24h:.2f}
+{"⚠️ Near LOW 24H" if near_low else ""}
+{"⚠️ Near HIGH 24H" if near_high else ""}
+"""
     if signal:
-        result += f"\n✅ Sinyal Terdeteksi: {signal}\n"
-        result += f"🎯 Entry: {entry:.2f}\n"
-        result += f"🛑 Stop Loss: {stop_loss:.2f}\n"
-        result += f"🎯 Take Profit: {take_profit:.2f}\n"
+        msg += f"""✅ Sinyal: {signal}
+🎯 Entry: {entry:.2f}
+🛑 SL: {stop_loss:.2f}
+🎯 TP: {take_profit:.2f}"""
     else:
-        result += "\n🚫 Tidak ada sinyal valid saat ini."
+        msg += "🚫 Tidak ada sinyal valid saat ini."
+    return msg, signal or "NONE", entry or 0
 
-    return result, signal or "NONE", entry or 0
-
-
-
+# === WEBHOOK ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "").strip().upper()
 
-    # === Handle callback queries (inline button clicks) ===
-    if "callback_query" in data:
-        callback_data = data["callback_query"]["data"]
-        chat_id = data["callback_query"]["message"]["chat"]["id"]
+        if text == "/HELP":
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔁 Backtest", callback_data="BACKTEST")],
+                [InlineKeyboardButton("✅ Cari LONG", callback_data="LONG"), InlineKeyboardButton("⛔ Cari SHORT", callback_data="SHORT")]
+            ])
+            help_msg = (
+                "🤖 *Bot Trading Gate.io:*\n"
+                "📈 /BACKTEST — Backtest semua pair\n"
+                "📉 RSI — Cari coin dengan RSI < 30\n"
+                "📈 RSIS — Cari coin RSI > 70\n"
+                "🕯️ CHART BTCUSDT — Analisa chart coin\n"
+                "🛒 BTCUSDT — Langsung analisa pair\n"
+            )
+            TELEGRAM_BOT.send_message(chat_id, help_msg, parse_mode="Markdown", reply_markup=markup)
 
-        if callback_data == "BACKTEST":
-            TELEGRAM_BOT.send_message(chat_id, "🧪 Memulai backtest semua simbol...")
-            summary = backtest_all_symbols(POPULAR_SYMBOLS, interval="1m", limit=500)
-            formatted = format_summary(summary)
-            TELEGRAM_BOT.send_message(chat_id, formatted, parse_mode="Markdown")
-            return "OK"
+        elif text in ["RSI", "RSIS"]:
+            TELEGRAM_BOT.send_message(chat_id, "🔎 Memproses data RSI...")
+            if text == "RSI":
+                result = []
+                for sym in POPULAR_SYMBOLS:
+                    ok, val = is_rsi_oversold(sym)
+                    if ok:
+                        result.append(f"🔻 *{sym}* - RSI `{val:.2f}`")
+                msg = "\n".join(result) if result else "✅ Tidak ada coin RSI < 30"
+            else:
+                result = check_rsi_overbought(POPULAR_SYMBOLS)
+                msg = "*Overbought 15m:*\n" + "\n".join(f"{s} - RSI {r}" for s, r in result) if result else "✅ Tidak ada RSI > 70"
+            TELEGRAM_BOT.send_message(chat_id, msg, parse_mode="Markdown")
 
-        if callback_data in ["LONG", "SHORT"]:
+        elif text.startswith("CHART "):
+            symbol = normalize_symbol(text.split()[1])
+            if not symbol:
+                TELEGRAM_BOT.send_message(chat_id, "❌ Simbol tidak dikenali.")
+                return "OK"
+            msg, _, _ = analyze_multi_timeframe(symbol)
+            TELEGRAM_BOT.send_message(chat_id, msg, parse_mode="Markdown")
+            chart = draw_chart_by_timeframe(symbol, "1m")
+            if chart:
+                TELEGRAM_BOT.send_photo(chat_id, chart)
+
+        elif text in ["LONG", "SHORT"]:
             found = False
-            TELEGRAM_BOT.send_message(chat_id, f"🔍 Mencari sinyal `{callback_data}` di 10 coin populer...", parse_mode="Markdown")
-            for symbol in POPULAR_SYMBOLS:
+            for s in POPULAR_SYMBOLS:
                 try:
-                    message, signal, entry = analyze_multi_timeframe(symbol)
-                    if signal == callback_data:
-                        TELEGRAM_BOT.send_message(chat_id, message, parse_mode="Markdown")
-                        chart = draw_chart_by_timeframe(symbol, "1m")
-                        if chart:
-                            TELEGRAM_BOT.send_photo(chat_id=chat_id, photo=chart)
-
-                        markup = InlineKeyboardMarkup()
-                        button = InlineKeyboardButton(
-                            text=f"Buka {symbol} di Gate 📲",
-                            url=f"https://www.gate.io/futures/usdt/{symbol}?ref=VLYSAW9ZCQ"
-                        )
-                        markup.add(button)
-                        TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Gate:", reply_markup=markup)
+                    msg, signal, _ = analyze_multi_timeframe(s)
+                    if signal == text:
+                        TELEGRAM_BOT.send_message(chat_id, msg, parse_mode="Markdown")
                         found = True
                 except Exception as e:
-                    print(f"Error cek {symbol}: {e}")
-
+                    print(f"{s}: {e}")
             if not found:
-                TELEGRAM_BOT.send_message(chat_id, f"❌ Tidak ditemukan sinyal `{callback_data}` saat ini.", parse_mode="Markdown")
-            return "OK"
+                TELEGRAM_BOT.send_message(chat_id, f"🚫 Tidak ditemukan sinyal {text}")
 
-        if callback_data.startswith("CHART_"):
-            try:
-                _, symbol, timeframe = callback_data.split("_")
-                chart = draw_chart_by_timeframe(symbol, timeframe)
-                caption = f"📊 {symbol} - {timeframe.upper()} Chart"
-                TELEGRAM_BOT.send_photo(chat_id=chat_id, photo=chart, caption=caption)
-
-                markup = InlineKeyboardMarkup()
-                btn_binance = InlineKeyboardButton(
-                    text=f"Buka {symbol} di Binance 📲",
-                    url=f"https://www.gate.io/futures/usdt/{symbol}?ref=VLYSAW9ZCQ"
-                )
-                markup.add(btn_binance)
-                TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Gate:", reply_markup=markup)
-            except Exception as e:
-                TELEGRAM_BOT.send_message(chat_id, f"⚠️ Gagal generate chart: {e}")
-            return "OK"
-
-    # === Handle regular messages ===
-    if "message" in data and "text" in data["message"]:
-        text = data["message"]["text"].strip().upper()
-        chat_id = data["message"]["chat"]["id"]
-
-        # === HELP ===
-        if text == "/HELP":
-            help_text = (
-                "🤖 *Panduan Bot Signal Trading:*\n\n"
-                "🔍 Kirim salah satu perintah berikut:\n"
-                "/BACKTEST — Jalankan backtest semua pair populer\n"
-                "LONG — Cari sinyal BUY (naik)\n"
-                "SHORT — Cari sinyal SELL (turun)\n"
-                "RSI — Tampilkan coin dengan RSI Oversold (15m)\n"
-                "RSIS — Tampilkan coin dengan RSI > 70 (Overbought)\n"
-                "CHART BTCUSDT — Lihat chart + sinyal untuk pair tertentu\n"
-                "BTCUSDT, ETHUSDT, dst — Analisa spesifik pair\n"
-                "/HELP — Tampilkan bantuan ini\n\n"
-                "💡 Tips: Gunakan di saat volatilitas tinggi untuk sinyal terbaik."
-            )
-
-            markup = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🔁 Backtest", callback_data="BACKTEST"),
-                    InlineKeyboardButton("✅ Cari LONG", callback_data="LONG"),
-                    InlineKeyboardButton("⛔ Cari SHORT", callback_data="SHORT")
-                ]
-            ])
-
-            TELEGRAM_BOT.send_message(chat_id, help_text, parse_mode="Markdown", reply_markup=markup)
-            return "OK"
-            
-         # === RSI Overbought ===
-        elif text == "RSIS":
-            TELEGRAM_BOT.send_message(chat_id, "📈 Mengecek RSI Overbought di 15m timeframe...")
-            result = check_rsi_overbought(POPULAR_SYMBOLS, interval="15m")
-            if not result:
-                TELEGRAM_BOT.send_message(chat_id, "⚠️ Tidak ditemukan coin dengan RSI > 70 saat ini.")
-            else:
-                msg = "*📊 RSI Overbought 15m:*\n\n"
-                msg += "Pair | RSI\n"
-                msg += "-" * 15 + "\n"
-                for sym, rsi in result:
-                    msg += f"{sym} | {rsi}\n"
+        else:
+            symbol = normalize_symbol(text)
+            if symbol:
+                msg, signal, _ = analyze_multi_timeframe(symbol)
                 TELEGRAM_BOT.send_message(chat_id, msg, parse_mode="Markdown")
-
-        # === RSI Oversold ===
-        if text == "RSI":
-            TELEGRAM_BOT.send_message(chat_id, "📉 Mendeteksi RSI oversold pada coin populer (15m)...")
-            oversold_list = []
-
-            for symbol in POPULAR_SYMBOLS:
-                symbol = normalize_symbol(symbol)
-                try:
-                    is_oversold, rsi_val = is_rsi_oversold(symbol, interval="15m")
-                    if is_oversold:
-                        oversold_list.append(f"🔻 *{symbol}* - RSI: `{rsi_val:.2f}`")
-
-                        chart = draw_chart_by_timeframe(symbol, "15m")
-                        if chart:
-                            TELEGRAM_BOT.send_photo(chat_id=chat_id, photo=chart, caption=f"{symbol} - RSI: {rsi_val:.2f}")
-                except Exception as e:
-                    print(f"Error cek RSI {symbol}: {e}")
-
-            if oversold_list:
-                reply = "*Coin dengan RSI Oversold (15m)*:\n\n" + "\n".join(oversold_list)
+                chart = draw_chart_by_timeframe(symbol, "1m")
+                if chart:
+                    TELEGRAM_BOT.send_photo(chat_id, chart)
             else:
-                reply = "✅ Tidak ada coin dengan RSI < 30 di timeframe 15m saat ini."
-            TELEGRAM_BOT.send_message(chat_id, reply, parse_mode="Markdown")
-            return "OK"
-
-        # === CHART SYMBOL ===
-        if text.startswith("CHART "):
-            parts = text.split()
-            if len(parts) == 2:
-                symbol = parts[1]
-                try:
-                    message, signal, entry = analyze_multi_timeframe(symbol)
-                    TELEGRAM_BOT.send_message(chat_id, message, parse_mode="Markdown")
-
-                    markup = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("1 Menit", callback_data=f"CHART_{symbol}_1m"),
-                            InlineKeyboardButton("5 Menit", callback_data=f"CHART_{symbol}_5m"),
-                        ],
-                        [
-                            InlineKeyboardButton("15 Menit", callback_data=f"CHART_{symbol}_15m"),
-                            InlineKeyboardButton("1 Jam", callback_data=f"CHART_{symbol}_1h"),
-                        ]
-                    ])
-                    TELEGRAM_BOT.send_message(chat_id, f"Pilih timeframe untuk {symbol}:", reply_markup=markup)
-                except Exception as e:
-                    TELEGRAM_BOT.send_message(chat_id, f"⚠️ Gagal mengambil chart: {e}")
-            else:
-                TELEGRAM_BOT.send_message(chat_id, "⚠️ Format tidak valid. Contoh: `CHART BTCUSDT`", parse_mode="Markdown")
-            return "OK"
-
-        # === Simbol langsung ===
-        if len(text) >= 6 and text.isalnum():
-            try:
-                message, signal, entry = analyze_multi_timeframe(text)
-                TELEGRAM_BOT.send_message(chat_id, message, parse_mode="Markdown")
-
-                if signal != "NONE":
-                    chart = draw_chart_by_timeframe(text, "1m")
-                    if chart:
-                        TELEGRAM_BOT.send_photo(chat_id, chart)
-
-                    markup = InlineKeyboardMarkup()
-                    button = InlineKeyboardButton(
-                        text=f"Buka {text} di Gate 📲",
-                        url=f"https://www.gate.io/futures/usdt/{symbol}?ref=VLYSAW9ZCQ"
-                    )
-                    markup.add(button)
-                    TELEGRAM_BOT.send_message(chat_id, "Klik tombol di bawah untuk buka di aplikasi Binance:", reply_markup=markup)
-            except Exception as e:
-                TELEGRAM_BOT.send_message(chat_id, f"⚠️ Error analisis: {e}")
-            return "OK"
-
-        TELEGRAM_BOT.send_message(chat_id, "⚠️ Format simbol tidak valid atau terlalu pendek.")
+                TELEGRAM_BOT.send_message(chat_id, "❌ Simbol tidak valid.")
     return "OK"
 
-   
-if __name__ == '__main__':
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
