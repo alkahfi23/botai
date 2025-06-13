@@ -16,9 +16,16 @@ TELEGRAM_BOT = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
 GATE_API_KEY = os.getenv("GATE_API_KEY")
 GATE_API_SECRET = os.getenv("GATE_API_SECRET")
 
-configuration = gate_api.Configuration(host="https://api.gateio.ws", key=GATE_API_KEY, secret=GATE_API_SECRET)
-api_client = gate_api.ApiClient(configuration)
-futures_api = gate_api.FuturesApi(api_client)
+# Konfigurasi dan klien
+configuration = Configuration(
+    key=GATE_API_KEY,
+    secret=GATE_API_SECRET,
+    host="https://api.gateio.ws"
+)
+api_client = ApiClient(configuration)
+
+# ✅ Ini harus disini, sebelum fungsi-fungsi lain
+futures_api = FuturesApi(api_client)
 
 POPULAR_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "XRP_USDT", "ADA_USDT", "DOT_USDT", "AVAX_USDT", "DOGE_USDT", "MATIC_USDT"]
 
