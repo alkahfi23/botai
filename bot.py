@@ -23,14 +23,29 @@ POPULAR_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "XRP_USDT", "
 
 VALID_GATE_CONTRACTS = []
 
-def get_all_gate_contracts(force_reload=False):
+def get_all_gate_contracts(force_reload=False, max_retries=3):
     global VALID_GATE_CONTRACTS
     if not VALID_GATE_CONTRACTS or force_reload:
-        try:
-            contracts = futures_api.list_futures_contracts(settle="usdt")
-            VALID_GATE_CONTRACTS = [c.name for c in contracts]
-        except Exception as e:
-            print(f"❌ Gagal ambil kontrak futures: {e}")
+        url = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
+        for attempt in range(max_retries):
+            try:
+                print(f"🔁 Ambil kontrak ke-{attempt + 1}...")
+                resp = requests.get(url, timeout=10)
+                if resp.status_code == 503:
+                    raise Exception("503 Service Unavailable")
+                resp.raise_for_status()
+                VALID_GATE_CONTRACTS = [item["name"] for item in resp.json()]
+                print("✅ Kontrak futures berhasil dimuat.")
+                return VALID_GATE_CONTRACTS
+            except Exception as e:
+                print(f"❌ Gagal ambil kontrak (percobaan {attempt + 1}): {e}")
+                time.sleep(2)
+
+        print("⚠️ Gunakan fallback daftar kontrak manual.")
+        VALID_GATE_CONTRACTS = [
+            "BTC_USDT", "ETH_USDT", "BNB_USDT", "SOL_USDT", "XRP_USDT",
+            "ADA_USDT", "DOGE_USDT", "DOT_USDT", "AVAX_USDT", "MATIC_USDT"
+        ]
     return VALID_GATE_CONTRACTS
 
 def normalize_symbol(symbol):
