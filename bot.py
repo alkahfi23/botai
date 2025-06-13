@@ -78,37 +78,42 @@ def escape_markdown(text):
     
 # Technicals
 
-def get_klines(symbol, interval="1m", limit=100):
+def get_klines(symbol, interval="1m", limit=100, max_retries=3):
     symbol = normalize_symbol(symbol)
     if not symbol:
         print(f"❌ Symbol tidak valid: {symbol}")
         return None
 
-    try:
-        candles = futures_api.list_futures_candlesticks(
-            settle="usdt",
-            contract=symbol,
-            interval=interval,
-            limit=limit
-        )
+    for attempt in range(1, max_retries + 1):
+        try:
+            candles = futures_api.list_futures_candlesticks(
+                settle="usdt",
+                contract=symbol,
+                interval=interval,
+                limit=limit
+            )
+            if not candles or len(candles) < 5:
+                print(f"⚠️ Data candlestick terlalu sedikit: {symbol} ({len(candles)} baris)")
+                return None
 
-        if not candles or len(candles) < 5:
-            print(f"⚠️ Data candlestick terlalu sedikit: {symbol} ({len(candles)} baris)")
-            return None
+            df = pd.DataFrame(candles, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        df = pd.DataFrame(candles, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.dropna(inplace=True)
+            df.set_index('timestamp', inplace=True)
+            return df.sort_index()
 
-        df.dropna(inplace=True)
-        df.set_index('timestamp', inplace=True)
-        return df.sort_index()
-
-    except gate_api.exceptions.ApiException as e:
-        print(f"❌ APIException ambil klines {symbol}: {e.status} - {e.body}")
-    except Exception as e:
-        print(f"❌ Error umum ambil klines {symbol}: {e}")
+        except gate_api.exceptions.ApiException as e:
+            print(f"❌ APIException ambil klines {symbol} (percobaan {attempt}): {e.status} - {e.body}")
+            if e.status == 503 and attempt < max_retries:
+                time.sleep(2 * attempt)  # Exponential backoff
+            else:
+                break
+        except Exception as e:
+            print(f"❌ Error umum ambil klines {symbol}: {e}")
+            break
 
     return None
 
