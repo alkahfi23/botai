@@ -64,21 +64,41 @@ def escape_markdown(text):
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
     
 # Technicals
+
 def get_klines(symbol, interval="1m", limit=100):
     symbol = normalize_symbol(symbol)
-    if not symbol: return None
+    if not symbol:
+        print(f"❌ Symbol tidak valid: {symbol}")
+        return None
+
     try:
         candles = futures_api.list_futures_candlesticks(
-            settle="usdt", contract=symbol, interval=interval, limit=limit
+            settle="usdt",
+            contract=symbol,
+            interval=interval,
+            limit=limit
         )
-        df = pd.DataFrame(candles, columns=['timestamp','volume','close','high','low','open'])
+
+        if not candles or len(candles) < 5:
+            print(f"⚠️ Data candlestick terlalu sedikit: {symbol} ({len(candles)} baris)")
+            return None
+
+        df = pd.DataFrame(candles, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-        for col in ['open','high','low','close','volume']:
+        for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
         df.dropna(inplace=True)
         df.set_index('timestamp', inplace=True)
         return df.sort_index()
-    except: return None
+
+    except gate_api.exceptions.ApiException as e:
+        print(f"❌ APIException ambil klines {symbol}: {e.status} - {e.body}")
+    except Exception as e:
+        print(f"❌ Error umum ambil klines {symbol}: {e}")
+
+    return None
+
 
 def get_24h_high_low(symbol):
     symbol = normalize_symbol(symbol)
