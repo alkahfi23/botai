@@ -60,7 +60,7 @@ def get_klines(symbol, interval="1m", limit=100):
         return None
 
     try:
-        url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
+        url = "https://api.gateio.ws/api/v4/futures/usdt"
         params = {
             "contract": symbol,
             "interval": interval,
