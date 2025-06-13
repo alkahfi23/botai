@@ -15,7 +15,6 @@ from gate_api.exceptions import ApiException
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 
-logging.basicConfig(level=logging.INFO)
 
 GATE_API_KEY = os.getenv("GATE_API_KEY")
 GATE_API_SECRET = os.getenv("GATE_API_SECRET")
@@ -30,6 +29,8 @@ api_client = ApiClient(configuration)
 
 # ✅ Ini harus disini, sebelum fungsi-fungsi lain
 futures_api = FuturesApi(api_client)
+
+logging.basicConfig(level=logging.INFO)
 
 # Jangan inisialisasi di luar fungsi jika startup internet lambat
 VALID_GATE_CONTRACTS = []
