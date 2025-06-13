@@ -12,23 +12,21 @@ import matplotlib.dates as mdates
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 
-# === Logging ===
 logging.basicConfig(level=logging.INFO)
 
-# 🔄 Ambil semua kontrak dari Gate.io (sekali saat start)
+# Gate.io symbol utilities
 def get_all_gate_contracts():
     try:
         url = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
         resp = requests.get(url)
         resp.raise_for_status()
-        return [item["name"] for item in resp.json()]  # contoh: BTC_USDT
+        return [item["name"] for item in resp.json()]
     except Exception as e:
         print(f"❌ Gagal ambil daftar kontrak futures: {e}")
         return []
 
 VALID_GATE_CONTRACTS = get_all_gate_contracts()
 
-# ✅ Fungsi normalisasi simbol user input (ex: BTCUSDT → BTC_USDT)
 def normalize_symbol(symbol):
     symbol = symbol.strip().upper()
     if symbol in VALID_GATE_CONTRACTS:
@@ -39,45 +37,33 @@ def normalize_symbol(symbol):
             return converted
     return None
 
+# Klines from Gate.io REST
 
-# === Ambil Data dari Gate.io Futures ===
 def get_klines(symbol, interval="1m", limit=100):
     symbol = normalize_symbol(symbol)
     if not symbol:
         print(f"❌ Symbol tidak valid: {symbol}")
         return None
-
     try:
         url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-        params = {
-            "contract": symbol,
-            "interval": interval,
-            "limit": limit
-        }
+        params = {"contract": symbol, "interval": interval, "limit": limit}
         headers = {"Accept": "application/json"}
         resp = requests.get(url, headers=headers, params=params)
         resp.raise_for_status()
         data = resp.json()
-
         if not data or len(data) < 5:
             print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi.")
             return None
-
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'volume', 'close', 'high', 'low', 'open'
-        ])
+        df = pd.DataFrame(data, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-
         df.dropna(inplace=True)
         df.set_index('timestamp', inplace=True)
         return df.sort_index()
-
     except Exception as e:
         print(f"❌ ERROR get_klines({symbol}, {interval}): {e}")
         return None
-
 
 def calculate_supertrend(df, period=10, multiplier=3):
     hl2 = (df['high'] + df['low']) / 2
@@ -85,7 +71,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
     upperband = hl2 + (multiplier * atr)
     lowerband = hl2 - (multiplier * atr)
     supertrend = [True] * len(df)
-
     for i in range(1, len(df)):
         if df['close'].iloc[i] > upperband.iloc[i - 1]:
             supertrend[i] = True
@@ -97,7 +82,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
                 lowerband.iloc[i] = lowerband.iloc[i - 1]
             if not supertrend[i] and upperband.iloc[i] > upperband.iloc[i - 1]:
                 upperband.iloc[i] = upperband.iloc[i - 1]
-
     return pd.DataFrame({
         'supertrend': supertrend,
         'upperband': upperband,
@@ -109,7 +93,6 @@ def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
     df = get_klines(symbol, interval=tf)
     if df is None or len(df) < 100:
         return None
-
     df['EMA50'] = ta.trend.EMAIndicator(df['close'], 50).ema_indicator()
     df['EMA200'] = ta.trend.EMAIndicator(df['close'], 200).ema_indicator()
     bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
@@ -131,7 +114,6 @@ def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9), sharex=True,
                                         gridspec_kw={'height_ratios': [3, 1.5, 1]})
 
-    # === Candlestick Chart ===
     from mplfinance.original_flavor import candlestick_ohlc
     candlestick_ohlc(ax1, ohlc.values, width=0.0005, colorup='g', colordown='r', alpha=0.8)
     ax1.plot(df.index, df['EMA50'], color='lime', label='EMA50')
@@ -144,37 +126,29 @@ def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
         color = 'green' if st['supertrend'].iloc[j] else 'red'
         ax1.axvspan(df.index[j-1], df.index[j], color=color, alpha=0.03)
 
-    # Support/Resistance
     support_idx = argrelextrema(df['low'].values, np.less_equal, order=10)[0]
     resistance_idx = argrelextrema(df['high'].values, np.greater_equal, order=10)[0]
     support = df['low'].iloc[support_idx].tail(3)
     resistance = df['high'].iloc[resistance_idx].tail(3)
     x_pos = df.index[-1]
 
-    offset_map = {
-        '1m': pd.Timedelta(minutes=2),
-        '5m': pd.Timedelta(minutes=10),
-        '15m': pd.Timedelta(minutes=20),
-        '1h': pd.Timedelta(hours=1),
-    }
+    offset_map = {'1m': pd.Timedelta(minutes=2), '5m': pd.Timedelta(minutes=10),
+                  '15m': pd.Timedelta(minutes=20), '1h': pd.Timedelta(hours=1)}
     x_offset = offset_map.get(tf, pd.Timedelta(minutes=10))
 
     for s in support:
         ax1.axhline(s, color='green', linestyle='--', linewidth=0.5)
-        ax1.text(x_pos + x_offset, s, f'{s:.2f}', va='center', ha='left',
-                 fontsize=7, color='green',
+        ax1.text(x_pos + x_offset, s, f'{s:.2f}', va='center', ha='left', fontsize=7, color='green',
                  bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
 
     for r in resistance:
         ax1.axhline(r, color='red', linestyle='--', linewidth=0.5)
-        ax1.text(x_pos + x_offset, r, f'{r:.2f}', va='center', ha='left',
-                 fontsize=7, color='red',
+        ax1.text(x_pos + x_offset, r, f'{r:.2f}', va='center', ha='left', fontsize=7, color='red',
                  bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
 
     last_price = df['close'].iloc[-1]
     ax1.axhline(last_price, color='black', linestyle='--', linewidth=0.6)
-    ax1.text(x_pos + x_offset, last_price, f'{last_price:.2f}',
-             va='center', ha='left', fontsize=8, color='black',
+    ax1.text(x_pos + x_offset, last_price, f'{last_price:.2f}', va='center', ha='left', fontsize=8, color='black',
              bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.2', alpha=0.7))
 
     if not support.empty and last_price < support.min():
@@ -192,7 +166,6 @@ def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
     ax1.legend(fontsize=6)
     ax1.grid(True)
 
-    # === RSI & MACD
     ax2.plot(df.index, df['RSI'], label='RSI', color='purple')
     ax2.axhline(70, color='red', linestyle='--', linewidth=0.5)
     ax2.axhline(30, color='green', linestyle='--', linewidth=0.5)
@@ -205,7 +178,6 @@ def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
     ax2b.legend(loc='upper right', fontsize=6)
     ax2.grid(True)
 
-    # === Volume
     colors = ['green' if c >= o else 'red' for c, o in zip(df['close'], df['open'])]
     ax3.bar(df.index, df['volume'], color=colors, alpha=0.4, label='Volume')
     ax3.plot(df.index, df['Volume_MA20'], color='blue', linewidth=0.8, label='MA20')
@@ -213,10 +185,7 @@ def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
     ax3.legend(fontsize=6)
     ax3.grid(True)
 
-    # Watermark
-    fig.text(0.5, 0.5, "Gate.io Signal Bot", fontsize=40, color='gray',
-             ha='center', va='center', alpha=0.1, rotation=30)
-
+    fig.text(0.5, 0.5, "Gate.io Signal Bot", fontsize=40, color='gray', ha='center', va='center', alpha=0.1, rotation=30)
     plt.tight_layout(h_pad=1.5)
     buf = BytesIO()
     plt.savefig(buf, format='png')
