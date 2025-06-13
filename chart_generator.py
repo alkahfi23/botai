@@ -17,22 +17,6 @@ from ta.trend import MACD
 
 logging.basicConfig(level=logging.INFO)
 
-TELEGRAM_BOT = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
-GATE_API_KEY = os.getenv("GATE_API_KEY")
-GATE_API_SECRET = os.getenv("GATE_API_SECRET")
-
-# Konfigurasi dan klien
-configuration = Configuration(
-    key=GATE_API_KEY,
-    secret=GATE_API_SECRET,
-    host="https://api.gateio.ws"
-)
-api_client = ApiClient(configuration)
-
-# ✅ Ini harus disini, sebelum fungsi-fungsi lain
-futures_api = FuturesApi(api_client)
-
-
 # Jangan inisialisasi di luar fungsi jika startup internet lambat
 VALID_GATE_CONTRACTS = []
 
