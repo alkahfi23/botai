@@ -7,6 +7,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from ta.momentum import RSIIndicator
 import matplotlib.pyplot as plt
+from chart_generator import draw_chart_by_timeframe
 
 app = Flask(__name__)
 
