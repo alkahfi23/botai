@@ -105,6 +105,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     }, index=df.index)
 
 def draw_chart_by_timeframe(symbol='BTC_USDT', tf='1m'):
+    symbol = normalize_symbol(symbol)
     df = get_klines(symbol, interval=tf)
     if df is None or len(df) < 100:
         return None
