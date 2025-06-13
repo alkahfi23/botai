@@ -30,40 +30,36 @@ def sign_request(method, path, body=""):
     return {'KEY': GATE_API_KEY, 'Timestamp': t, 'SIGN': sign}
 
 def get_klines(symbol, interval="1m", limit=100):
+    symbol = normalize_symbol(symbol)
+    if not symbol:
+        print(f"❌ Symbol tidak valid: {symbol}")
+        return None
+
     try:
-        path = "/api/v4/futures/usdt/candlesticks"
-        url = BASE + path
+        url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
         params = {
-            "contract": symbol,  # ✅ gunakan contract, bukan currency_pair
+            "contract": symbol,
             "interval": interval,
             "limit": limit
         }
-        headers = {'Accept': 'application/json'}
-
+        headers = {"Accept": "application/json"}
         resp = requests.get(url, headers=headers, params=params)
         resp.raise_for_status()
-
         data = resp.json()
 
         if not data or len(data) < 5:
-            print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi. Hanya {len(data)} baris.")
+            print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi.")
             return None
 
         df = pd.DataFrame(data, columns=[
             'timestamp', 'volume', 'close', 'high', 'low', 'open'
         ])
-
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         df.dropna(inplace=True)
         df.set_index('timestamp', inplace=True)
-
-        if df.empty or len(df) < 5:
-            print(f"⚠️ DataFrame kosong atau terlalu pendek untuk {symbol}")
-            return None
-
         return df.sort_index()
 
     except Exception as e:
