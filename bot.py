@@ -86,12 +86,14 @@ def get_klines(symbol, interval="1m", limit=100, max_retries=3):
 
     for attempt in range(1, max_retries + 1):
         try:
+            print(f"📡 [Attempt {attempt}] Fetching klines: {symbol} - {interval}")
             candles = futures_api.list_futures_candlesticks(
                 settle="usdt",
                 contract=symbol,
                 interval=interval,
                 limit=limit
             )
+
             if not candles or len(candles) < 5:
                 print(f"⚠️ Data candlestick terlalu sedikit: {symbol} ({len(candles)} baris)")
                 return None
@@ -106,15 +108,17 @@ def get_klines(symbol, interval="1m", limit=100, max_retries=3):
             return df.sort_index()
 
         except gate_api.exceptions.ApiException as e:
-            print(f"❌ APIException ambil klines {symbol} (percobaan {attempt}): {e.status} - {e.body}")
+            print(f"❌ APIException (HTTP {e.status}) ambil klines {symbol}: {e.body}")
             if e.status == 503 and attempt < max_retries:
-                time.sleep(2 * attempt)  # Exponential backoff
+                print(f"🔁 Retry dalam {2 * attempt} detik...")
+                time.sleep(2 * attempt)
             else:
                 break
         except Exception as e:
-            print(f"❌ Error umum ambil klines {symbol}: {e}")
+            print(f"❌ Exception umum ambil klines {symbol}: {e}")
             break
 
+    print(f"❌ Gagal mengambil data klines {symbol} setelah {max_retries} percobaan.")
     return None
 
 
