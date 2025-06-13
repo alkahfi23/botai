@@ -250,7 +250,7 @@ def format_summary(summary):
         lines.append(f"{s['symbol']} | {s['total_trades']} | {s['wins']} | {s['losses']} | {s['accuracy']}% | {s['avg_rr']} | {s['profit_factor']}")
     return "\n".join(lines)
 
-def analyze_multi_timeframe(symbol)
+def analyze_multi_timeframe(symbol):
     df_15m = get_klines(symbol, '15m', 500)
     df_5m = get_klines(symbol, '5m', 500)
     df_1m = get_klines(symbol, '1m', 500)
