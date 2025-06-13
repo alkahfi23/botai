@@ -6,4 +6,3 @@ python-telegram-bot
 ta
 pyTelegramBotAPI
 scipy
-telebot
