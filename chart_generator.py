@@ -16,29 +16,43 @@ from ta.trend import MACD
 logging.basicConfig(level=logging.INFO)
 
 # === Ambil Data dari Gate.io Futures ===
-def get_klines(symbol, interval="1m", limit=200):
-    url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-    params = {
-        "currency_pair": symbol,
-        "interval": interval,
-        "limit": limit
-    }
-    headers = {"Accept": "application/json"}
-
+def get_klines(symbol, interval="1m", limit=100):
     try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        raw = response.json()
-        df = pd.DataFrame(raw, columns=[
+        p = f"?currency_pair={symbol}&interval={interval}&limit={limit}"
+        path = "/api/v4/futures/usdt/candlesticks" + p
+        url = BASE + path
+        headers = {'Accept': 'application/json'}
+
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()  # cek kalau status bukan 200
+
+        data = resp.json()
+
+        if not data or len(data) < 5:  # minimal 5 baris agar bisa dihitung indikator
+            print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi. Hanya {len(data)} baris.")
+            return None
+
+        df = pd.DataFrame(data, columns=[
             'timestamp', 'volume', 'close', 'high', 'low', 'open'
         ])
+
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df.dropna(inplace=True)
         df.set_index('timestamp', inplace=True)
-        df = df.astype(float)
+
+        if df.empty or len(df) < 5:
+            print(f"⚠️ DataFrame kosong atau terlalu pendek untuk {symbol}")
+            return None
+
         return df.sort_index()
+
     except Exception as e:
-        print(f"❌ Gagal ambil data {symbol}: {e}")
+        print(f"❌ ERROR get_klines({symbol}, {interval}): {e}")
         return None
+
 
 def calculate_supertrend(df, period=10, multiplier=3):
     hl2 = (df['high'] + df['low']) / 2
