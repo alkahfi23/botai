@@ -10,6 +10,7 @@ import requests
 import logging
 import matplotlib.dates as mdates
 import gate_api
+import time
 from gate_api import Configuration, ApiClient, FuturesApi
 from gate_api.exceptions import ApiException
 from ta.momentum import RSIIndicator
