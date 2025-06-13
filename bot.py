@@ -1,6 +1,7 @@
 from flask import Flask, request
 import os, time, json, re
 import pandas as pd, numpy as np
+import requests
 import ta
 from datetime import datetime
 import telebot
