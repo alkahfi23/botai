@@ -29,6 +29,30 @@ def sign_request(method, path, body=""):
     sign = hmac.new(GATE_API_SECRET.encode(), message.encode(), hashlib.sha512).hexdigest()
     return {'KEY': GATE_API_KEY, 'Timestamp': t, 'SIGN': sign}
 
+# 🔄 Ambil semua kontrak dari Gate.io (sekali saat start)
+def get_all_gate_contracts():
+    try:
+        url = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
+        resp = requests.get(url)
+        resp.raise_for_status()
+        return [item["name"] for item in resp.json()]  # contoh: BTC_USDT
+    except Exception as e:
+        print(f"❌ Gagal ambil daftar kontrak futures: {e}")
+        return []
+
+VALID_GATE_CONTRACTS = get_all_gate_contracts()
+
+# ✅ Fungsi normalisasi simbol user input (ex: BTCUSDT → BTC_USDT)
+def normalize_symbol(symbol):
+    symbol = symbol.strip().upper()
+    if symbol in VALID_GATE_CONTRACTS:
+        return symbol
+    if "_" not in symbol and symbol.endswith("USDT"):
+        converted = symbol.replace("USDT", "_USDT")
+        if converted in VALID_GATE_CONTRACTS:
+            return converted
+    return None
+
 def get_klines(symbol, interval="1m", limit=100):
     symbol = normalize_symbol(symbol)
     if not symbol:
