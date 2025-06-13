@@ -62,26 +62,35 @@ def get_klines(symbol, interval="1m", limit=100):
     if not symbol:
         print(f"❌ Symbol tidak valid: {symbol}")
         return None
+
     try:
-        url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-        params = {"contract": symbol, "interval": interval, "limit": limit}
-        headers = {"Accept": "application/json"}
-        resp = requests.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data or len(data) < 5:
-            print(f"⚠️ Data candlestick {symbol}-{interval} tidak mencukupi.")
+        candles = futures_api.list_futures_candlesticks(
+            settle="usdt",
+            contract=symbol,
+            interval=interval,
+            limit=limit
+        )
+
+        if not candles or len(candles) < 5:
+            print(f"⚠️ Data candlestick terlalu sedikit: {symbol} ({len(candles)} baris)")
             return None
-        df = pd.DataFrame(data, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
+
+        df = pd.DataFrame(candles, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
         df.dropna(inplace=True)
         df.set_index('timestamp', inplace=True)
         return df.sort_index()
+
+    except gate_api.exceptions.ApiException as e:
+        print(f"❌ APIException ambil klines {symbol}: {e.status} - {e.body}")
     except Exception as e:
-        print(f"❌ ERROR get_klines({symbol}, {interval}): {e}")
-        return None
+        print(f"❌ Error umum ambil klines {symbol}: {e}")
+
+    return None
+
 
 def calculate_supertrend(df, period=10, multiplier=3):
     hl2 = (df['high'] + df['low']) / 2
