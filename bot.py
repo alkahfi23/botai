@@ -75,7 +75,26 @@ def normalize_symbol(symbol):
 def escape_markdown(text):
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
-    
+
+def fallback_klines_http(symbol, interval="1m", limit=100):
+    try:
+        url = f"https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
+        params = {"contract": symbol, "interval": interval, "limit": limit}
+        headers = {"Accept": "application/json"}
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            df = pd.DataFrame(data, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.dropna(inplace=True)
+            df.set_index('timestamp', inplace=True)
+            return df.sort_index()
+    except Exception as e:
+        print(f"[FALLBACK ERROR] Gagal ambil via REST: {e}")
+    return None
+
 # Technicals
 
 def get_klines(symbol, interval="1m", limit=100, max_retries=3):
@@ -121,7 +140,12 @@ def get_klines(symbol, interval="1m", limit=100, max_retries=3):
             break
 
     return None
-
+        # If all retries fail, try fallback
+    print("🔁 Coba fallback via REST API...")
+    fallback_df = fallback_klines_http(symbol, interval, limit)
+    if fallback_df is not None:
+        print(f"✅ Fallback berhasil untuk {symbol}")
+    return fallback_df
 
 def get_24h_high_low(symbol):
     symbol = normalize_symbol(symbol)
