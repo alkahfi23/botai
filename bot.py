@@ -270,88 +270,147 @@ Candle: `{candle_pattern or 'N/A'}`
 
 
 # === WEBHOOK ===
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
+        data = request.get_json(force=True)
+
         if not data:
-            return "NO DATA"
+            print("❌ Tidak ada data masuk ke webhook")
+            return "NO DATA", 400
 
+        # === HANDLE TELEGRAM MESSAGE ===
         if "message" in data:
-            chat_id = data["message"]["chat"]["id"]
-            text = data["message"].get("text", "").strip().upper()
-            print(f"📩 User input: {text}")
+            return handle_telegram_message(data["message"])
 
-            if text == "/HELP":
-                markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔁 Backtest", callback_data="BACKTEST")],
-                    [InlineKeyboardButton("✅ Cari LONG", callback_data="LONG"), InlineKeyboardButton("⛔ Cari SHORT", callback_data="SHORT")]
-                ])
-                help_msg = (
-                    "🤖 *Bot Trading Gate.io:*\n"
-                    "📈 /BACKTEST — Backtest semua pair\n"
-                    "📉 RSI — Cari coin dengan RSI < 30\n"
-                    "📈 RSIS — Cari coin RSI > 70\n"
-                    "🕯️ CHART BTCUSDT — Analisa chart coin\n"
-                    "🛒 BTCUSDT — Langsung analisa pair"
-                )
-                TELEGRAM_BOT.send_message(chat_id, escape_markdown(help_msg), parse_mode="MarkdownV2", reply_markup=markup)
-
-            elif text in ["RSI", "RSIS"]:
-                TELEGRAM_BOT.send_message(chat_id, "🔎 Memproses data RSI...")
-                if text == "RSI":
-                    result = []
-                    for sym in POPULAR_SYMBOLS:
-                        ok, val = is_rsi_oversold(sym)
-                        if ok:
-                            result.append(f"🔻 *{sym}* - RSI `{val:.2f}`")
-                    msg = "\n".join(result) if result else "✅ Tidak ada coin RSI < 30"
-                else:
-                    result = check_rsi_overbought(POPULAR_SYMBOLS)
-                    msg = "*Overbought 15m:*\n" + "\n".join(f"{s} - RSI {r}" for s, r in result) if result else "✅ Tidak ada RSI > 70"
-                TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
-
-            elif text.startswith("CHART "):
-                symbol = normalize_symbol(text.split()[1])
-                if not symbol:
-                    TELEGRAM_BOT.send_message(chat_id, escape_markdown("❌ Simbol tidak dikenali."), parse_mode="MarkdownV2")
-                    return "OK"
-                msg, _, _ = analyze_multi_timeframe(symbol)
-                TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
-                chart = draw_chart_by_timeframe(symbol, "1m")
-                if chart:
-                    TELEGRAM_BOT.send_photo(chat_id, chart)
-
-            elif text in ["LONG", "SHORT"]:
-                found = False
-                for s in POPULAR_SYMBOLS:
-                    try:
-                        msg, signal, _ = analyze_multi_timeframe(s)
-                        if signal == text:
-                            TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
-                            found = True
-                    except Exception as e:
-                        print(f"{s}: {e}")
-                if not found:
-                    TELEGRAM_BOT.send_message(chat_id, escape_markdown(f"🚫 Tidak ditemukan sinyal {text}"), parse_mode="MarkdownV2")
-
-            else:
-                symbol = normalize_symbol(text)
-                if symbol:
-                    msg, signal, _ = analyze_multi_timeframe(symbol)
-                    TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
-                    chart = draw_chart_by_timeframe(symbol, "1m")
-                    if chart:
-                        TELEGRAM_BOT.send_photo(chat_id, chart)
-                else:
-                    TELEGRAM_BOT.send_message(chat_id, escape_markdown("❌ Simbol tidak valid."), parse_mode="MarkdownV2")
-
-        return "OK"
+        # === HANDLE GATE.IO WEBHOOK ===
+        return handle_gateio_webhook(data)
 
     except Exception as e:
         print(f"❌ Error di webhook: {e}")
         return "ERROR", 500
 
+
+def handle_telegram_message(message):
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "").strip().upper()
+    print(f"📩 Pesan masuk dari user: {text}")
+
+    if text == "/HELP":
+        return send_help_message(chat_id)
+
+    elif text in ["RSI", "RSIS"]:
+        return process_rsi_command(chat_id, text)
+
+    elif text.startswith("CHART "):
+        return process_chart_command(chat_id, text)
+
+    elif text in ["LONG", "SHORT"]:
+        return find_signals(chat_id, text)
+
+    else:
+        return analyze_single_pair(chat_id, text)
+
+
+def send_help_message(chat_id):
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔁 Backtest", callback_data="BACKTEST")],
+        [InlineKeyboardButton("✅ Cari LONG", callback_data="LONG"),
+         InlineKeyboardButton("⛔ Cari SHORT", callback_data="SHORT")]
+    ])
+    help_msg = (
+        "🤖 *Bot Trading Gate.io:*\n"
+        "📈 /BACKTEST — Backtest semua pair\n"
+        "📉 RSI — Cari coin dengan RSI < 30\n"
+        "📈 RSIS — Cari coin RSI > 70\n"
+        "🕯️ CHART BTCUSDT — Analisa chart coin\n"
+        "🛒 BTCUSDT — Langsung analisa pair"
+    )
+    TELEGRAM_BOT.send_message(chat_id, escape_markdown(help_msg), parse_mode="MarkdownV2", reply_markup=markup)
+    return "OK"
+
+
+def process_rsi_command(chat_id, command):
+    TELEGRAM_BOT.send_message(chat_id, "🔎 Memproses data RSI...")
+
+    result = []
+    if command == "RSI":
+        for sym in POPULAR_SYMBOLS:
+            ok, val = is_rsi_oversold(sym)
+            if ok:
+                result.append(f"🔻 *{sym}* - RSI `{val:.2f}`")
+        msg = "\n".join(result) if result else "✅ Tidak ada coin RSI < 30"
+    else:
+        result = check_rsi_overbought(POPULAR_SYMBOLS)
+        msg = "*Overbought 15m:*\n" + "\n".join(f"{s} - RSI {r}" for s, r in result) if result else "✅ Tidak ada RSI > 70"
+
+    TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
+    return "OK"
+
+
+def process_chart_command(chat_id, text):
+    symbol = normalize_symbol(text.split()[1])
+    if not symbol:
+        TELEGRAM_BOT.send_message(chat_id, escape_markdown("❌ Simbol tidak dikenali."), parse_mode="MarkdownV2")
+        return "OK"
+
+    msg, _, _ = analyze_multi_timeframe(symbol)
+    TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
+
+    chart = draw_chart_by_timeframe(symbol, "1m")
+    if chart:
+        TELEGRAM_BOT.send_photo(chat_id, chart)
+    return "OK"
+
+
+def find_signals(chat_id, signal_type):
+    found = False
+    for symbol in POPULAR_SYMBOLS:
+        try:
+            msg, signal, _ = analyze_multi_timeframe(symbol)
+            if signal == signal_type:
+                TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
+                found = True
+        except Exception as e:
+            print(f"[{symbol}] ❌ Error analisa: {e}")
+    if not found:
+        TELEGRAM_BOT.send_message(chat_id, escape_markdown(f"🚫 Tidak ditemukan sinyal {signal_type}"), parse_mode="MarkdownV2")
+    return "OK"
+
+
+def analyze_single_pair(chat_id, text):
+    symbol = normalize_symbol(text)
+    if symbol:
+        msg, signal, _ = analyze_multi_timeframe(symbol)
+        TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
+
+        chart = draw_chart_by_timeframe(symbol, "1m")
+        if chart:
+            TELEGRAM_BOT.send_photo(chat_id, chart)
+    else:
+        TELEGRAM_BOT.send_message(chat_id, escape_markdown("❌ Simbol tidak valid."), parse_mode="MarkdownV2")
+    return "OK"
+
+
+def handle_gateio_webhook(data):
+    print(f"📡 Webhook Gate.io masuk:\n{data}")
+
+    symbol = data.get("symbol") or data.get("currency_pair")
+    if not symbol:
+        return "NO SYMBOL", 400
+
+    try:
+        is_oversold, rsi_val = is_rsi_oversold(symbol)
+        if is_oversold:
+            print(f"[RSI] 🔻 {symbol} RSI oversold: {rsi_val:.2f}")
+        else:
+            print(f"[RSI] {symbol} aman, RSI: {rsi_val:.2f}")
+        return "GATEIO OK", 200
+    except Exception as e:
+        print(f"[RSI ERROR] {symbol}: {e}")
+        return "GATEIO ERROR", 500
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
