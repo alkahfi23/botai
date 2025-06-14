@@ -79,7 +79,7 @@ def normalize_symbol(symbol):
             return converted
     return None
 
-def get_kline(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=15):
+def get_klines(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=15):
     """
     Subscribe ke data Kline via WebSocket Gate.io Futures v4
     Parameters:
