@@ -168,13 +168,17 @@ def detect_reversal_candle(df):
     return None
 
 def analyze_multi_timeframe(symbol):
-    df_15m = get_klines(symbol, '15m', 300)
-    df_5m = get_klines(symbol, '5m', 300)
-    df_1m = get_klines(symbol, '1m', 300)
+    df_15m = get_klines(symbol, '15m', 500)
+    if df_15m is None:
+        print(f"[DEBUG] ❌ df_15m kosong untuk {symbol}")
+    df_5m = get_klines(symbol, '5m', 500)
+    if df_5m is None:
+        print(f"[DEBUG] ❌ df_5m kosong untuk {symbol}")
+    df_1m = get_klines(symbol, '1m', 500)
+    if df_1m is None:
+        print(f"[DEBUG] ❌ df_1m kosong untuk {symbol}")
 
-    if not all([df_15m is not None and not df_15m.empty,
-                df_5m is not None and not df_5m.empty,
-                df_1m is not None and not df_1m.empty]):
+    if not all([df_15m is not None, df_5m is not None, df_1m is not None]):
         return f"❌ Gagal ambil data {symbol}", "ERROR", 0
 
     try:
