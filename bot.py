@@ -78,7 +78,7 @@ def escape_markdown(text):
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
-def get_klines(symbol="BTC_USDT", interval=None, intervals=None, contract_type="usdt", duration=20):
+def get_klines(symbol="BTC_USDT", interval=None, intervals=None, contract_type="usdt", duration=20, verbose=True):
     if interval and not intervals:
         intervals = [interval]
     elif not intervals:
@@ -96,31 +96,53 @@ def get_klines(symbol="BTC_USDT", interval=None, intervals=None, contract_type="
                 "payload": [i, symbol]
             }
             ws.send(json.dumps(payload))
-            print(f"[OPEN] Subscribed to {symbol} @ {i}")
+            if verbose:
+                print(f"[OPEN] Subscribed to {symbol} @ {i}")
 
     def on_message(ws, message):
-        data = json.loads(message)
-        if data.get("event") == "update" and data.get("channel") == "futures.candlesticks":
-            kline_raw = data["result"][0]
-            interval_raw = kline_raw["n"].split("_")[0]
-            kline_dict = {
-                "timestamp": pd.to_datetime(kline_raw['t'], unit="s"),
-                "open": float(kline_raw['o']),
-                "high": float(kline_raw['h']),
-                "low": float(kline_raw['l']),
-                "close": float(kline_raw['c']),
-                "volume": float(kline_raw['v']),
-                "amount": float(kline_raw['a']),
-            }
-            if interval_raw in klines_by_interval:
-                klines_by_interval[interval_raw].append(kline_dict)
-                print(f"[KLINE] {symbol} @ {interval_raw} → {kline_dict}")
+        try:
+            data = json.loads(message)
+            if data.get("event") == "update" and data.get("channel") == "futures.candlesticks":
+                kline_raw = data["result"][0]
+                interval_raw = kline_raw["n"]  # already like '1m_BTC_USDT', but we subscribed to e.g. '1m'
+
+                # Extract interval properly
+                for i in intervals:
+                    if interval_raw.startswith(i):
+                        interval_used = i
+                        break
+                else:
+                    return  # interval not matched
+
+                kline_dict = {
+                    "timestamp": pd.to_datetime(kline_raw['t'], unit="s"),
+                    "open": float(kline_raw['o']),
+                    "high": float(kline_raw['h']),
+                    "low": float(kline_raw['l']),
+                    "close": float(kline_raw['c']),
+                    "volume": float(kline_raw['v']),
+                    "amount": float(kline_raw['a']),
+                }
+
+                # Replace if same timestamp
+                existing = klines_by_interval[interval_used]
+                if existing and existing[-1]["timestamp"] == kline_dict["timestamp"]:
+                    existing[-1] = kline_dict
+                else:
+                    existing.append(kline_dict)
+
+                if verbose:
+                    print(f"[KLINE] {symbol} @ {interval_used} → {kline_dict}")
+        except Exception as e:
+            if verbose:
+                print("[PARSE ERROR]", e)
 
     def on_error(ws, error):
         print("[ERROR]", error)
 
     def on_close(ws, code, msg):
-        print("[CLOSED] WebSocket closed:", code, "-", msg)
+        if verbose:
+            print("[CLOSED] WebSocket closed:", code, "-", msg)
 
     ws = websocket.WebSocketApp(
         url,
@@ -156,18 +178,18 @@ def get_24h_high_low(symbol):
     except:
         return None, None
 
-def is_rsi_oversold(symbol, interval="15m", limit=100):
-    df = get_klines(symbol, [interval], duration=20).get(interval)
+def is_rsi_oversold(symbol, intervals="15m", limit=100):
+    df = get_klines(symbol, [intervals], duration=20).get(intervals)
     if df is None or len(df) < 15: return False, None
     try:
         rsi = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
         return rsi < 30, rsi
     except: return False, None
 
-def check_rsi_overbought(symbols, interval="15m", limit=100):
+def check_rsi_overbought(symbols, intervals="15m", limit=100):
     result = []
     for s in symbols:
-        df = get_klines(s, [interval], duration=20).get(interval)
+        df = get_klines(s, [intervals], duration=20).get(intervals)
         if df is None or len(df) < 15: continue
         try:
             rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
