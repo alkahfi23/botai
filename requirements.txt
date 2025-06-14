@@ -7,3 +7,4 @@ ta
 pyTelegramBotAPI
 scipy
 gate-api
+websocket-client
