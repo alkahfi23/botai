@@ -79,59 +79,49 @@ def normalize_symbol(symbol):
             return converted
     return None
     
-def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="usdt", duration=20):
+def get_klines(symbol="BTC_USDT", interval=None, intervals=None, contract_type="usdt", duration=20):
+    if interval and not intervals:
+        intervals = [interval]
+    elif not intervals:
+        intervals = ["1m", "5m", "15m"]  # Default intervals
+
     url = f"wss://fx-ws.gateio.ws/v4/ws/{contract_type}"
-    klines_by_interval = {interval: [] for interval in intervals}
+    klines_by_interval = {i: [] for i in intervals}
 
     def on_open(ws):
-        for interval in intervals:
+        for i in intervals:
             payload = {
                 "time": int(time.time()),
                 "channel": "futures.candlesticks",
                 "event": "subscribe",
-                "payload": [interval, symbol]
+                "payload": [i, symbol]
             }
             ws.send(json.dumps(payload))
-            print(f"✅ Subscribed to {symbol} @ {interval}")
+            print(f"[OPEN] Subscribed to {symbol} @ {i}")
 
     def on_message(ws, message):
-        try:
-            data = json.loads(message)
-
-            if data.get("event") != "update" or data.get("channel") != "futures.candlesticks":
-                return
-
-            kline_raw = data.get("result", [])[0]  # Ambil pertama dari list
-            if not isinstance(kline_raw, dict):
-                return
-
-            interval_key = kline_raw.get("n", "")
-            if "_" not in interval_key:
-                return
-
-            interval = interval_key.split("_")[0]
+        data = json.loads(message)
+        if data.get("event") == "update" and data.get("channel") == "futures.candlesticks":
+            kline_raw = data["result"][0]
+            interval_raw = kline_raw["n"].split("_")[0]
             kline_dict = {
-                "timestamp": pd.to_datetime(kline_raw.get("t", 0), unit="s"),
-                "open": float(kline_raw.get("o", 0)),
-                "high": float(kline_raw.get("h", 0)),
-                "low": float(kline_raw.get("l", 0)),
-                "close": float(kline_raw.get("c", 0)),
-                "volume": float(kline_raw.get("v", 0)),
-                "amount": float(kline_raw.get("a", 0)),
+                "timestamp": pd.to_datetime(kline_raw['t'], unit="s"),
+                "open": float(kline_raw['o']),
+                "high": float(kline_raw['h']),
+                "low": float(kline_raw['l']),
+                "close": float(kline_raw['c']),
+                "volume": float(kline_raw['v']),
+                "amount": float(kline_raw['a']),
             }
-
-            if interval in klines_by_interval:
-                klines_by_interval[interval].append(kline_dict)
-                print(f"📈 {symbol} @ {interval}: {kline_dict}")
-
-        except Exception as e:
-            print(f"❌ Error parsing message: {e}")
+            if interval_raw in klines_by_interval:
+                klines_by_interval[interval_raw].append(kline_dict)
+                print(f"[KLINE] {symbol} @ {interval_raw} → {kline_dict}")
 
     def on_error(ws, error):
-        print(f"🚨 WebSocket Error: {error}")
+        print("[ERROR]", error)
 
     def on_close(ws, code, msg):
-        print(f"🔌 WebSocket Closed: {code} — {msg}")
+        print("[CLOSED] WebSocket closed:", code, "-", msg)
 
     ws = websocket.WebSocketApp(
         url,
@@ -149,13 +139,10 @@ def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="
     ws.close()
     t.join()
 
-    # Convert ke DataFrame
     dfs = {}
-    for interval, data in klines_by_interval.items():
-        df = pd.DataFrame(data)
-        if not df.empty:
-            df = df.sort_values("timestamp")
-        dfs[interval] = df
+    for i, data in klines_by_interval.items():
+        df = pd.DataFrame(data).sort_values("timestamp")
+        dfs[i] = df
 
     return dfs
 
