@@ -7,9 +7,7 @@ from datetime import datetime
 import telebot
 import gate_api
 import websocket
-import json
 import threading
-import time
 from gate_api import Configuration, ApiClient, FuturesApi
 from gate_api.exceptions import ApiException
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -154,7 +152,7 @@ def get_24h_high_low(symbol):
         return None, None
 
 def is_rsi_oversold(symbol, interval="15m", limit=100):
-    df = get_klines(symbol, interval, limit)
+    df = get_klines(symbol, [interval], duration=20).get(interval)
     if df is None or len(df) < 15: return False, None
     try:
         rsi = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
@@ -164,7 +162,7 @@ def is_rsi_oversold(symbol, interval="15m", limit=100):
 def check_rsi_overbought(symbols, interval="15m", limit=100):
     result = []
     for s in symbols:
-        df = get_klines(s, interval, limit)
+        df = get_klines(s, [interval], duration=20).get(interval)
         if df is None or len(df) < 15: continue
         try:
             rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
