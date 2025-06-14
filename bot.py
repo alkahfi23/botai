@@ -156,18 +156,18 @@ def get_24h_high_low(symbol):
     except:
         return None, None
 
-def is_rsi_oversold(symbol, intervals="15m", limit=100):
-    df = get_klines(symbol, [intervals], duration=20).get(intervals)
+def is_rsi_oversold(symbol, interval="15m", limit=100):
+    df = get_klines(symbol, [interval], duration=20).get(interval)
     if df is None or len(df) < 15: return False, None
     try:
         rsi = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
         return rsi < 30, rsi
     except: return False, None
 
-def check_rsi_overbought(symbols, intervals="15m", limit=100):
+def check_rsi_overbought(symbols, interval="15m", limit=100):
     result = []
     for s in symbols:
-        df = get_klines(s, [intervals], duration=20).get(intervals)
+        df = get_klines(s, [interval], duration=20).get(interval)
         if df is None or len(df) < 15: continue
         try:
             rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
