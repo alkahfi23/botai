@@ -171,39 +171,59 @@ def analyze_multi_timeframe(symbol):
     df_15m = get_klines(symbol, '15m', 500)
     df_5m = get_klines(symbol, '5m', 500)
     df_1m = get_klines(symbol, '1m', 500)
-    if not all([df_15m is not None, df_5m is not None, df_1m is not None]):
+
+    if not all([df_15m is not None and not df_15m.empty,
+                df_5m is not None and not df_5m.empty,
+                df_1m is not None and not df_1m.empty]):
         return f"❌ Gagal ambil data {symbol}", "ERROR", 0
+
     try:
         for df in [df_15m, df_5m, df_1m]:
+            if len(df) < 20:
+                return f"❌ Data terlalu pendek untuk analisa {symbol}", "ERROR", 0
+
             df['EMA20'] = df['close'].ewm(span=20).mean()
             df['RSI'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
             bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
-            df['BB_H'] = bb.bollinger_hband(); df['BB_L'] = bb.bollinger_lband()
-    except Exception as e:
-        return f"❌ Error indikator {symbol}: {e}", "ERROR", 0
-    last = df_1m.iloc[-1]
-    candle_pattern = detect_reversal_candle(df_1m)
-    trend_15m = "UP" if df_15m['close'].iloc[-1] > df_15m['EMA20'].iloc[-1] else "DOWN"
-    trend_5m = "UP" if df_5m['close'].iloc[-1] > df_5m['EMA20'].iloc[-1] else "DOWN"
-    high_24h, low_24h = get_24h_high_low(symbol)
-    near_low = last['close'] <= low_24h * 1.01
-    near_high = last['close'] >= high_24h * 0.99
-    signal, entry, stop_loss, take_profit = None, None, None, None
-    if trend_15m == "UP" and trend_5m == "UP":
-        if last['RSI'] < 30 and last['close'] < last['BB_L'] and near_low and candle_pattern in ['Hammer', 'InvertedHammer', 'Engulfing']:
-            signal = "LONG"
-            entry = last['close']
-            sl = df_1m[df_1m['close'] < df_1m['BB_L']]['low']
-            stop_loss = sl.iloc[-1] if not sl.empty else df_1m['low'].min()
-            take_profit = entry + 2 * (entry - stop_loss)
-    elif trend_15m == "DOWN" and trend_5m == "DOWN":
-        if last['RSI'] > 70 and last['close'] > last['BB_H'] and near_high and candle_pattern in ['ShootingStar', 'Engulfing']:
-            signal = "SHORT"
-            entry = last['close']
-            sl = df_1m[df_1m['close'] > df_1m['BB_H']]['high']
-            stop_loss = sl.iloc[-1] if not sl.empty else df_1m['high'].max()
-            take_profit = entry - 2 * (stop_loss - entry)
-    msg = f"""📉 Pair: {symbol}
+            df['BB_H'] = bb.bollinger_hband()
+            df['BB_L'] = bb.bollinger_lband()
+
+        if df_1m.empty or len(df_1m) < 1:
+            return f"❌ Data 1m kosong untuk {symbol}", "ERROR", 0
+
+        last = df_1m.iloc[-1]
+
+        candle_pattern = detect_reversal_candle(df_1m)
+
+        trend_15m = "UP" if df_15m['close'].iloc[-1] > df_15m['EMA20'].iloc[-1] else "DOWN"
+        trend_5m = "UP" if df_5m['close'].iloc[-1] > df_5m['EMA20'].iloc[-1] else "DOWN"
+
+        high_24h, low_24h = get_24h_high_low(symbol)
+        if high_24h is None or low_24h is None:
+            high_24h, low_24h = last['close'], last['close']
+
+        near_low = last['close'] <= low_24h * 1.01
+        near_high = last['close'] >= high_24h * 0.99
+
+        signal, entry, stop_loss, take_profit = None, None, None, None
+
+        if trend_15m == "UP" and trend_5m == "UP":
+            if last['RSI'] < 30 and last['close'] < last['BB_L'] and near_low and candle_pattern in ['Hammer', 'InvertedHammer', 'Engulfing']:
+                signal = "LONG"
+                entry = last['close']
+                sl = df_1m[df_1m['close'] < df_1m['BB_L']]['low']
+                stop_loss = sl.iloc[-1] if not sl.empty else df_1m['low'].min()
+                take_profit = entry + 2 * (entry - stop_loss)
+
+        elif trend_15m == "DOWN" and trend_5m == "DOWN":
+            if last['RSI'] > 70 and last['close'] > df_1m['BB_H'].iloc[-1] and near_high and candle_pattern in ['ShootingStar', 'Engulfing']:
+                signal = "SHORT"
+                entry = last['close']
+                sl = df_1m[df_1m['close'] > df_1m['BB_H']]['high']
+                stop_loss = sl.iloc[-1] if not sl.empty else df_1m['high'].max()
+                take_profit = entry - 2 * (stop_loss - entry)
+
+        msg = f"""📉 Pair: {symbol}
 Trend 15m: {trend_15m} | 5m: {trend_5m}
 RSI 1m: {last['RSI']:.2f} | Price: {last['close']:.2f}
 Candle: `{candle_pattern or 'N/A'}`
@@ -211,14 +231,20 @@ Candle: `{candle_pattern or 'N/A'}`
 {"⚠️ Near LOW 24H" if near_low else ""}
 {"⚠️ Near HIGH 24H" if near_high else ""}
 """
-    if signal:
-        msg += f"""✅ Sinyal: {signal}
+
+        if signal:
+            msg += f"""✅ Sinyal: {signal}
 🎯 Entry: {entry:.2f}
 🛑 SL: {stop_loss:.2f}
 🎯 TP: {take_profit:.2f}"""
-    else:
-        msg += "🚫 Tidak ada sinyal valid saat ini."
-    return msg, signal or "NONE", entry or 0
+        else:
+            msg += "🚫 Tidak ada sinyal valid saat ini."
+
+        return msg, signal or "NONE", entry or 0
+
+    except Exception as e:
+        return f"❌ Error analisa {symbol}: {e}", "ERROR", 0
+
 
 # === WEBHOOK ===
 
