@@ -85,7 +85,7 @@ import pandas as pd
 
 
 def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="usdt", duration=20):
-    url = f"wss://fx-ws.gateio.ws/v4/ws/{contract_type}"
+    url = f"wss://fx-ws.gateio.ws/v4/ws/usdt/{contract_type}"
     klines_by_interval = {interval: [] for interval in intervals}
 
     def on_open(ws):
