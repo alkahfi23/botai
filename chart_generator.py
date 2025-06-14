@@ -79,6 +79,13 @@ def normalize_symbol(symbol):
             return converted
     return None
 
+import json
+import time
+import threading
+import websocket
+import pandas as pd
+
+
 def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="usdt", duration=20):
     url = f"wss://fx-ws.gateio.ws/v4/ws/{contract_type}"
     klines_by_interval = {interval: [] for interval in intervals}
@@ -144,6 +151,21 @@ def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="
     t = threading.Thread(target=ws.run_forever)
     t.daemon = True
     t.start()
+
+    time.sleep(duration)
+    ws.close()
+    t.join()
+
+    # Convert ke DataFrame
+    dfs = {}
+    for interval, data in klines_by_interval.items():
+        df = pd.DataFrame(data)
+        if not df.empty:
+            df = df.sort_values("timestamp")
+        dfs[interval] = df
+
+    return dfs
+
     
 def calculate_supertrend(df, period=10, multiplier=3):
     hl2 = (df['high'] + df['low']) / 2
