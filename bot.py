@@ -369,8 +369,11 @@ def process_rsi_command(chat_id, command):
         msg = "\n".join(result) if result else "✅ Tidak ada coin RSI < 30"
     else:
         result = check_rsi_overbought(POPULAR_SYMBOLS)
+    if isinstance(result, list):  # ✅ pastikan iterable
         msg = "*Overbought 15m:*\n" + "\n".join(f"{s} - RSI {r}" for s, r in result) if result else "✅ Tidak ada RSI > 70"
-
+    else:
+        msg = f"❌ Format return tidak valid: {result}"
+        
     TELEGRAM_BOT.send_message(chat_id, escape_markdown(msg), parse_mode="MarkdownV2")
     return "OK"
 
