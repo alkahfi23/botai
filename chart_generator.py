@@ -79,20 +79,12 @@ def normalize_symbol(symbol):
             return converted
     return None
 
-def get_klines(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=15):
-    """
-    Subscribe ke data Kline via WebSocket Gate.io Futures v4
-    Parameters:
-        symbol        : str  -> simbol pair (misal: 'BTC_USDT', 'ETH_USDT', dsb.)
-        interval      : str  -> interval candle ('10s', '1m', '5m', '1h', '1d', dll.)
-        contract_type : str  -> 'usdt' (USDT-margined) atau 'btc' (BTC-margined)
-        duration      : int  -> berapa detik ingin ambil data sebelum disconnect
-    """
+klines_collected = []
 
+def get_klines(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=10):
     url = f"wss://fx-ws.gateio.ws/v4/ws/{contract_type}"
 
     def on_open(ws):
-        print(f"[OPEN] Subscribe Kline {symbol} @ {interval}")
         payload = {
             "time": int(time.time()),
             "channel": "futures.candlesticks",
@@ -104,14 +96,26 @@ def get_klines(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=
     def on_message(ws, message):
         data = json.loads(message)
         if data.get("event") == "update" and data.get("channel") == "futures.candlesticks":
-            kline_data = data["result"]
-            print(f"[KLINE] {symbol} @ {interval} → {kline_data}")
+            kline_raw = data["result"][0]
+            # Ubah jadi dict biar gampang masuk ke DataFrame
+            kline_dict = {
+                "timestamp": kline_raw['t'],
+                "volume": kline_raw['v'],
+                "close": kline_raw['c'],
+                "high": kline_raw['h'],
+                "low": kline_raw['l'],
+                "open": kline_raw['o'],
+                "amount": kline_raw['a'],
+                "name": kline_raw['n']
+            }
+            print(f"[KLINE] {symbol} @ {interval} → {kline_dict}")
+            klines_collected.append(kline_dict)
 
     def on_error(ws, error):
-        print("[ERROR]", error)
+        print("Error:", error)
 
     def on_close(ws, code, msg):
-        print(f"[CLOSED] WebSocket closed: {code} - {msg}")
+        print("[CLOSED] WebSocket closed:", code, "-", msg)
 
     ws = websocket.WebSocketApp(
         url,
@@ -121,12 +125,10 @@ def get_klines(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=
         on_close=on_close
     )
 
-    # Jalankan WebSocket dalam thread terpisah
-    thread = threading.Thread(target=ws.run_forever)
-    thread.daemon = True
-    thread.start()
+    t = threading.Thread(target=ws.run_forever)
+    t.daemon = True
+    t.start()
 
-    # Jalankan selama `duration` detik
     time.sleep(duration)
     ws.close()
 def calculate_supertrend(df, period=10, multiplier=3):
