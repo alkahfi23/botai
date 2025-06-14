@@ -80,7 +80,7 @@ def escape_markdown(text):
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
-def get_kline(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=15):
+def get_klines(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=15):
     """
     Subscribe ke data Kline via WebSocket Gate.io Futures v4
     Parameters:
