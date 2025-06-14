@@ -6,6 +6,10 @@ import ta
 from datetime import datetime
 import telebot
 import gate_api
+import websocket
+import json
+import threading
+import time
 from gate_api import Configuration, ApiClient, FuturesApi
 from gate_api.exceptions import ApiException
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -76,76 +80,56 @@ def escape_markdown(text):
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
-def fallback_klines_http(symbol, interval="1m", limit=100):
-    try:
-        url = f"https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-        params = {"contract": symbol, "interval": interval, "limit": limit}
-        headers = {"Accept": "application/json"}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            df = pd.DataFrame(data, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            df.dropna(inplace=True)
-            df.set_index('timestamp', inplace=True)
-            return df.sort_index()
-    except Exception as e:
-        print(f"[FALLBACK ERROR] Gagal ambil via REST: {e}")
-    return None
+def get_kline(symbol="BTC_USDT", interval="1m", contract_type="usdt", duration=15):
+    """
+    Subscribe ke data Kline via WebSocket Gate.io Futures v4
+    Parameters:
+        symbol        : str  -> simbol pair (misal: 'BTC_USDT', 'ETH_USDT', dsb.)
+        interval      : str  -> interval candle ('10s', '1m', '5m', '1h', '1d', dll.)
+        contract_type : str  -> 'usdt' (USDT-margined) atau 'btc' (BTC-margined)
+        duration      : int  -> berapa detik ingin ambil data sebelum disconnect
+    """
 
-# Technicals
+    url = f"wss://fx-ws.gateio.ws/v4/ws/{contract_type}"
 
-def get_klines(symbol, interval="1m", limit=100, max_retries=3):
-    symbol = normalize_symbol(symbol)
-    if not symbol:
-        print(f"❌ Symbol tidak valid: {symbol}")
-        return None
+    def on_open(ws):
+        print(f"[OPEN] Subscribe Kline {symbol} @ {interval}")
+        payload = {
+            "time": int(time.time()),
+            "channel": "futures.candlesticks",
+            "event": "subscribe",
+            "payload": [interval, symbol]
+        }
+        ws.send(json.dumps(payload))
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            candles = futures_api.list_futures_candlesticks(
-                settle="usdt",
-                contract=symbol,
-                interval=interval,
-                limit=limit
-            )
+    def on_message(ws, message):
+        data = json.loads(message)
+        if data.get("event") == "update" and data.get("channel") == "futures.candlesticks":
+            kline_data = data["result"]
+            print(f"[KLINE] {symbol} @ {interval} → {kline_data}")
 
-            if not candles:
-                print(f"⚠️ Tidak ada candlestick: {symbol}")
-                return None
-            if len(candles) < 20:
-                print(f"⚠️ Data terlalu pendek untuk {symbol}: hanya {len(candles)} baris")
-                # Tetap coba return dataframe agar bisa ditangani oleh pemanggil
-                # tapi tandai pakai kolom kosong nanti
-                break
+    def on_error(ws, error):
+        print("[ERROR]", error)
 
-            df = pd.DataFrame(candles, columns=['timestamp', 'volume', 'close', 'high', 'low', 'open'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            df.dropna(inplace=True)
-            df.set_index('timestamp', inplace=True)
-            return df.sort_index()
+    def on_close(ws, code, msg):
+        print(f"[CLOSED] WebSocket closed: {code} - {msg}")
 
-        except gate_api.exceptions.ApiException as e:
-            print(f"❌ APIException ambil klines {symbol} (percobaan {attempt}): {e.status} - {e.body}")
-            if e.status == 503 and attempt < max_retries:
-                time.sleep(2 * attempt)  # Exponential backoff
-            else:
-                break
-        except Exception as e:
-            print(f"❌ Error umum ambil klines {symbol}: {e}")
-            break
+    ws = websocket.WebSocketApp(
+        url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
 
-    return None
-        # If all retries fail, try fallback
-    print("🔁 Coba fallback via REST API...")
-    fallback_df = fallback_klines_http(symbol, interval, limit)
-    if fallback_df is not None:
-        print(f"✅ Fallback berhasil untuk {symbol}")
-    return fallback_df
+    # Jalankan WebSocket dalam thread terpisah
+    thread = threading.Thread(target=ws.run_forever)
+    thread.daemon = True
+    thread.start()
+
+    # Jalankan selama `duration` detik
+    time.sleep(duration)
+    ws.close()
 
 def get_24h_high_low(symbol):
     symbol = normalize_symbol(symbol)
