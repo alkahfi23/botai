@@ -92,31 +92,46 @@ def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="
                 "payload": [interval, symbol]
             }
             ws.send(json.dumps(payload))
-            print(f"[OPEN] Subscribed to {symbol} @ {interval}")
+            print(f"✅ Subscribed to {symbol} @ {interval}")
 
     def on_message(ws, message):
-        data = json.loads(message)
-        if data.get("event") == "update" and data.get("channel") == "futures.candlesticks":
-            kline_raw = data["result"][0]
-            interval = kline_raw["n"].split("_")[0]  # Extract interval from "1m_BTC_USDT"
+        try:
+            data = json.loads(message)
+
+            if data.get("event") != "update" or data.get("channel") != "futures.candlesticks":
+                return
+
+            kline_raw = data.get("result", [])[0]  # Ambil pertama dari list
+            if not isinstance(kline_raw, dict):
+                return
+
+            interval_key = kline_raw.get("n", "")
+            if "_" not in interval_key:
+                return
+
+            interval = interval_key.split("_")[0]
             kline_dict = {
-                "timestamp": pd.to_datetime(kline_raw['t'], unit="s"),
-                "open": float(kline_raw['o']),
-                "high": float(kline_raw['h']),
-                "low": float(kline_raw['l']),
-                "close": float(kline_raw['c']),
-                "volume": float(kline_raw['v']),
-                "amount": float(kline_raw['a']),
+                "timestamp": pd.to_datetime(kline_raw.get("t", 0), unit="s"),
+                "open": float(kline_raw.get("o", 0)),
+                "high": float(kline_raw.get("h", 0)),
+                "low": float(kline_raw.get("l", 0)),
+                "close": float(kline_raw.get("c", 0)),
+                "volume": float(kline_raw.get("v", 0)),
+                "amount": float(kline_raw.get("a", 0)),
             }
+
             if interval in klines_by_interval:
                 klines_by_interval[interval].append(kline_dict)
-                print(f"[KLINE] {symbol} @ {interval} → {kline_dict}")
+                print(f"📈 {symbol} @ {interval}: {kline_dict}")
+
+        except Exception as e:
+            print(f"❌ Error parsing message: {e}")
 
     def on_error(ws, error):
-        print("[ERROR]", error)
+        print(f"🚨 WebSocket Error: {error}")
 
     def on_close(ws, code, msg):
-        print("[CLOSED] WebSocket closed:", code, "-", msg)
+        print(f"🔌 WebSocket Closed: {code} — {msg}")
 
     ws = websocket.WebSocketApp(
         url,
@@ -129,18 +144,7 @@ def get_klines(symbol="BTC_USDT", intervals=["1m", "5m", "15m"], contract_type="
     t = threading.Thread(target=ws.run_forever)
     t.daemon = True
     t.start()
-
-    time.sleep(duration)
-    ws.close()
-    t.join()
-
-    # Convert each interval's list to a DataFrame
-    dfs = {}
-    for interval, data in klines_by_interval.items():
-        df = pd.DataFrame(data).sort_values("timestamp")
-        dfs[interval] = df
-
-    return dfs
+    
 def calculate_supertrend(df, period=10, multiplier=3):
     hl2 = (df['high'] + df['low']) / 2
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range()
